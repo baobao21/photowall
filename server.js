@@ -117,13 +117,11 @@ const likeLimiter = rateLimit({
 
 // ---------- display logic ----------
 async function getEngagement(photoId, startedAt, uploaderIpHash) {
-  // 1. Get total all-time counts to display on the frontend UI
   const [totalLikes, totalComments] = await Promise.all([
     supabase.from('likes').select('*', { count: 'exact', head: true }).eq('photo_id', photoId),
     supabase.from('comments').select('*', { count: 'exact', head: true }).eq('photo_id', photoId),
   ]);
 
-  // 2. Get session-specific engagement (current rotation + non-OP) for time calculation
   const [sessionLikesRes, sessionCommentsRes] = await Promise.all([
     supabase.from('likes').select('liker_ip_hash').eq('photo_id', photoId).gte('created_at', startedAt),
     supabase.from('comments').select('is_op, commenter_ip_hash').eq('photo_id', photoId).gte('created_at', startedAt),
@@ -240,8 +238,27 @@ app.post('/api/upload', uploadLimiter, upload.single('photo'), async (req, res) 
       return res.status(400).json({ error: 'Captions cannot contain links or promotional URLs.' });
     }
 
-    const requestedName = (req.body.opName || '').toString().trim().slice(0, 20);
-    const opName = requestedName || generateName();
+    const ipHash = hashIp(clientIp(req));
+
+    // Check if this IP address already has a permanent nickname locked in from previous uploads
+    const { data: existingUser } = await supabase.from('photos')
+      .select('op_name')
+      .eq('uploader_ip_hash', ipHash)
+      .not('op_name', 'is', null)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    let opName;
+    if (existingUser?.op_name) {
+      // Reuse their original permanent nickname
+      opName = existingUser.op_name;
+    } else {
+      // First time upload: use requested name or generate one
+      const requestedName = (req.body.opName || '').toString().trim().slice(0, 20);
+      opName = requestedName || generateName();
+    }
+
     const opToken = crypto.randomUUID();
 
     const storagePath = `uploads/${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
@@ -256,7 +273,7 @@ app.post('/api/upload', uploadLimiter, upload.single('photo'), async (req, res) 
         caption,
         op_name: opName,
         op_token: opToken,
-        uploader_ip_hash: hashIp(clientIp(req)),
+        uploader_ip_hash: ipHash,
         status: 'pending',
       })
       .select('id')
@@ -373,7 +390,6 @@ app.post('/api/comments', commentLimiter, async (req, res) => {
     return res.status(500).json({ error: 'Comment failed.' });
   }
   
-  // Return the newly created comment object for instant frontend display
   res.json(comment);
 });
 
