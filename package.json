@@ -1,20 +1,19 @@
+
 {
   "name": "photowall",
   "version": "1.0.0",
   "description": "One random photo on the big screen. Likes and comments buy it more time.",
+  "private": true,
   "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": "20.x" 
   },
-  "engines": {
-    "node": ">=18"
-  },
+  
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.4",
+    "@supabase/supabase-js": "^2.45.0",
     "dotenv": "^16.4.5",
-    "express": "^4.21.0",
+    "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
-    "multer": "^2.0.1"
+    "multer": "^2.0.0"
   }
 }
