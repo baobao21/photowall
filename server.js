@@ -15,7 +15,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const BUCKET = process.env.SUPABASE_BUCKET || 'photos';
-const REQUIRE_APPROVAL = process.env.REQUIRE_APPROVAL === 'true';
+// New uploads wait for admin approval unless you explicitly set REQUIRE_APPROVAL=false
+const REQUIRE_APPROVAL = process.env.REQUIRE_APPROVAL !== 'false';
+const MAX_PENDING_PER_USER = 3;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -46,43 +48,6 @@ if (!process.env.IP_SALT) {
 // someone get unlimited fake IPs. Express's req.ip only trusts the proxy hops we configure.
 const clientIp = (req) => (req.ip || req.socket.remoteAddress || 'unknown').replace(/^::ffff:/, '');
 const hashIp = (ip) => crypto.createHash('sha256').update(`${ip}:${IP_SALT}`).digest('hex');
-
-// ---------- permanent poster names (one name per IP hash, forever) ----------
-async function getPosterName(ipHash) {
-  const { data } = await supabase.from('posters').select('name').eq('ip_hash', ipHash).maybeSingle();
-  if (data?.name) return data.name;
-
-  // Legacy: this IP posted before the posters table existed -> adopt the name from its first photo
-  const { data: old } = await supabase.from('photos')
-    .select('op_name').eq('uploader_ip_hash', ipHash).not('op_name', 'is', null)
-    .order('created_at', { ascending: true }).limit(1).maybeSingle();
-  if (old?.op_name) {
-    const { error } = await supabase.from('posters').insert({ ip_hash: ipHash, name: old.op_name });
-    if (!error) return old.op_name;
-    const { data: again } = await supabase.from('posters').select('name').eq('ip_hash', ipHash).maybeSingle();
-    return again?.name || null; // name taken by someone else -> treat as unbound
-  }
-  return null;
-}
-
-// Returns { name } (existing or newly bound) or { taken: true } if the requested name is in use.
-async function claimPosterName(ipHash, requested) {
-  const existing = await getPosterName(ipHash);
-  if (existing) return { name: existing, existing: true };
-
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const useRequested = attempt === 0 && requested;
-    const candidate = useRequested ? requested : generateName();
-    const { error } = await supabase.from('posters').insert({ ip_hash: ipHash, name: candidate });
-    if (!error) return { name: candidate };
-    if (error.code !== '23505') throw error;
-    // unique violation: either a parallel request already bound this IP, or the name is taken
-    const raced = await getPosterName(ipHash);
-    if (raced) return { name: raced, existing: true };
-    if (useRequested) return { taken: true };
-  }
-  throw new Error('Could not allocate a poster name');
-}
 
 // Detect real image type from file bytes (don't trust the client's mimetype)
 function sniffImage(buf) {
@@ -136,7 +101,7 @@ app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'adm
 const limiterOpts = (windowMs, max, message) => ({
   windowMs, max, standardHeaders: true, legacyHeaders: false,
   keyGenerator: (req) => clientIp(req),
-  validate: { keyGeneratorIpFallback: false, ip: false },
+  validate: false, // we key on our own clientIp(); skip the library's IP self-checks (works on v7 and v8)
   ...(message ? { message: { error: message } } : {}),
 });
 const uploadLimiter = rateLimit(limiterOpts(15 * 60 * 1000, 10, 'Upload limit reached. Try again in a few minutes.'));
@@ -240,6 +205,115 @@ app.get('/api/current', wrap(async (req, res) => {
   res.json(current || { photo: null, engagement: { likes: 0, comments: 0 }, remainingSeconds: 0, totalSeconds: 0 });
 }));
 
+// ---------- accounts (Supabase Auth stores users; we issue our own signed session token) ----------
+const SESSION_SECRET = process.env.SESSION_SECRET ||
+  crypto.createHash('sha256').update('session:' + process.env.SUPABASE_SERVICE_ROLE_KEY).digest('hex');
+const SESSION_DAYS = 30;
+const b64u = (v) => Buffer.from(v).toString('base64url');
+
+function signToken(uid) {
+  const p = b64u(JSON.stringify({ u: uid, e: Date.now() + SESSION_DAYS * 864e5 }));
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(p).digest('base64url');
+  return `${p}.${sig}`;
+}
+function verifyToken(t) {
+  if (!t || typeof t !== 'string') return null;
+  const [p, sig] = t.split('.');
+  if (!p || !sig) return null;
+  const expect = crypto.createHmac('sha256', SESSION_SECRET).update(p).digest('base64url');
+  const a = Buffer.from(sig), b = Buffer.from(expect);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const d = JSON.parse(Buffer.from(p, 'base64url').toString());
+    return d.e > Date.now() ? d.u : null;
+  } catch { return null; }
+}
+const bearer = (req) => (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+async function getProfile(userId) {
+  const { data } = await supabase.from('profiles').select('user_id, username, ip_hash').eq('user_id', userId).maybeSingle();
+  return data || null;
+}
+async function optionalUser(req) {
+  const uid = verifyToken(bearer(req));
+  return uid ? getProfile(uid) : null;
+}
+const requireUser = wrap(async (req, res, next) => {
+  const profile = await optionalUser(req);
+  if (!profile) return res.status(401).json({ error: 'Please sign in.' });
+  req.profile = profile;
+  next();
+});
+
+const signupLimiter = rateLimit(limiterOpts(60 * 60 * 1000, 5, 'Too many sign-up attempts. Try again later.'));
+const loginLimiter = rateLimit(limiterOpts(15 * 60 * 1000, 15, 'Too many login attempts. Try again later.'));
+const RESERVED_NAMES = /^(admin|administrator|moderator|mod|anonymous|system|support|thewall)$/i;
+
+app.post('/api/auth/signup', signupLimiter, wrap(async (req, res) => {
+  const { email, password, username } = req.body || {};
+  const em = String(email || '').trim().toLowerCase();
+  const un = String(username || '').trim();
+  if (!/^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/.test(em)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  if (typeof password !== 'string' || password.length < 8 || password.length > 72) {
+    return res.status(400).json({ error: 'Password must be 8–72 characters.' });
+  }
+  if (!/^[A-Za-z0-9_]{3,20}$/.test(un) || RESERVED_NAMES.test(un)) {
+    return res.status(400).json({ error: 'Username must be 3–20 letters, numbers or underscores.' });
+  }
+
+  const ip = clientIp(req);
+  if (await isBadIp(ip)) return res.status(403).json({ error: 'Sign-ups are disabled on VPN/proxy connections.' });
+  const ipHash = hashIp(ip);
+
+  // one account per IP
+  const { data: ipUsed } = await supabase.from('profiles').select('user_id').eq('ip_hash', ipHash).maybeSingle();
+  if (ipUsed) return res.status(409).json({ error: 'An account already exists for this connection (one account per IP).' });
+  const { data: nameUsed } = await supabase.from('profiles').select('user_id').eq('username_lower', un.toLowerCase()).maybeSingle();
+  if (nameUsed) return res.status(409).json({ error: 'That username is already taken.' });
+
+  const { data: created, error: cErr } = await supabase.auth.admin.createUser({ email: em, password, email_confirm: true });
+  if (cErr || !created?.user) {
+    if (/already|registered|exists/i.test(cErr?.message || '')) return res.status(409).json({ error: 'That email is already registered.' });
+    console.error('[signup] createUser:', cErr);
+    return res.status(500).json({ error: 'Could not create the account.' });
+  }
+  const uid = created.user.id;
+  const { error: pErr } = await supabase.from('profiles').insert({ user_id: uid, username: un, ip_hash: ipHash });
+  if (pErr) {
+    await supabase.auth.admin.deleteUser(uid); // roll back so the email isn't burned
+    if (pErr.code === '23505') return res.status(409).json({ error: 'That username or connection is already taken.' });
+    console.error('[signup] profile:', pErr);
+    return res.status(500).json({ error: 'Could not create the profile. Did you run schema.sql?' });
+  }
+  res.json({ ok: true, token: signToken(uid), profile: { username: un } });
+}));
+
+app.post('/api/auth/login', loginLimiter, wrap(async (req, res) => {
+  const { email, password } = req.body || {};
+  const em = String(email || '').trim().toLowerCase();
+  if (!em || typeof password !== 'string') return res.status(400).json({ error: 'Email and password required.' });
+  // fresh client each time so a user's session never leaks into our service-role client
+  const authClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
+    { auth: { persistSession: false, autoRefreshToken: false } });
+  const { data, error } = await authClient.auth.signInWithPassword({ email: em, password });
+  if (error || !data?.user) return res.status(401).json({ error: 'Invalid email or password.' });
+  const profile = await getProfile(data.user.id);
+  if (!profile) return res.status(403).json({ error: 'This account has no profile.' });
+  res.json({ ok: true, token: signToken(profile.user_id), profile: { username: profile.username } });
+}));
+
+app.get('/api/me', requireUser, wrap(async (req, res) => {
+  const p = req.profile;
+  const { data } = await supabase.from('photos')
+    .select('id, storage_path, caption, status, created_at')
+    .eq('user_id', p.user_id).order('created_at', { ascending: false }).limit(30);
+  res.json({
+    username: p.username,
+    ipMatches: !p.ip_hash || p.ip_hash === hashIp(clientIp(req)),
+    photos: (data || []).map((x) => ({ ...x, url: supabase.storage.from(BUCKET).getPublicUrl(x.storage_path).data.publicUrl })),
+  });
+}));
+
+// ---------- upload (account required) ----------
 const uploadSingle = (req, res, next) =>
   upload.single('photo')(req, res, (err) => {
     if (!err) return next();
@@ -247,43 +321,39 @@ const uploadSingle = (req, res, next) =>
     res.status(400).json({ error: msg });
   });
 
-app.post('/api/upload', uploadLimiter, uploadSingle, wrap(async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No photo attached.' });
+app.post('/api/upload', uploadLimiter, requireUser, uploadSingle, wrap(async (req, res) => {
+  const profile = req.profile;
+  const ip = clientIp(req);
+  const ipHash = hashIp(ip);
 
+  if (!req.file) return res.status(400).json({ error: 'No photo attached.' });
   const kind = sniffImage(req.file.buffer);
   if (!kind) return res.status(400).json({ error: 'Only JPG, PNG, WebP or GIF images are allowed.' });
-
   const caption = (req.body.caption || '').toString().slice(0, 280);
   if (containsMaliciousContent(caption)) {
     return res.status(400).json({ error: 'Captions cannot contain links or promotional URLs.' });
   }
-  const requestedName = (req.body.opName || '').toString().trim().slice(0, 20);
-  if (containsMaliciousContent(requestedName)) {
-    return res.status(400).json({ error: 'Names cannot contain links.' });
-  }
-  if (await isBadIp(clientIp(req))) {
-    return res.status(403).json({ error: 'Uploads are disabled on VPN/proxy connections.' });
-  }
-  // The name is bound to this IP permanently; whatever was typed is ignored if one already exists.
-  const ipHash = hashIp(clientIp(req));
-  let claim;
-  try {
-    claim = await claimPosterName(ipHash, requestedName);
-  } catch (err) {
-    console.error('[upload] poster name:', err);
-    const missing = err.code === '42P01' || err.code === 'PGRST205' || /posters/.test(err.message || '');
-    return res.status(500).json({
-      error: missing
-        ? 'Setup problem: the "posters" table is missing. Run schema.sql in the Supabase SQL editor.'
-        : `Could not assign a poster name (${err.message || 'unknown error'}).`,
-    });
-  }
-  if (claim.taken) {
-    return res.status(409).json({ error: 'That name is already taken. Pick another, or leave it blank for a random one.' });
-  }
-  const opName = claim.name;
-  const opToken = crypto.randomUUID();
+  if (await isBadIp(ip)) return res.status(403).json({ error: 'Uploads are disabled on VPN/proxy connections.' });
 
+  // Account <-> IP lock: an account can only upload from the IP it is locked to.
+  if (profile.ip_hash && profile.ip_hash !== ipHash) {
+    return res.status(403).json({ error: 'Your account is locked to a different connection. Ask the admin to reset your IP lock.' });
+  }
+  if (!profile.ip_hash) { // admin reset the lock -> bind to this connection now
+    const { error: bindErr } = await supabase.from('profiles').update({ ip_hash: ipHash }).eq('user_id', profile.user_id);
+    if (bindErr) return res.status(409).json({ error: 'This connection is already linked to another account.' });
+  }
+
+  if (REQUIRE_APPROVAL) {
+    const { count } = await supabase.from('photos').select('*', { count: 'exact', head: true })
+      .eq('user_id', profile.user_id).eq('status', 'pending');
+    if ((count || 0) >= MAX_PENDING_PER_USER) {
+      return res.status(429).json({ error: `You already have ${MAX_PENDING_PER_USER} photos waiting for approval.` });
+    }
+  }
+
+  const opName = profile.username;
+  const opToken = crypto.randomUUID();
   const storagePath = `uploads/${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${kind.ext}`;
   const { error: upErr } = await supabase.storage.from(BUCKET)
     .upload(storagePath, req.file.buffer, { contentType: kind.mime, upsert: false });
@@ -294,21 +364,16 @@ app.post('/api/upload', uploadLimiter, uploadSingle, wrap(async (req, res) => {
 
   const status = REQUIRE_APPROVAL ? 'pending' : 'live';
   const { data: photo, error: dbErr } = await supabase.from('photos')
-    .insert({ storage_path: storagePath, caption, op_name: opName, op_token: opToken, uploader_ip_hash: ipHash, status })
+    .insert({ storage_path: storagePath, caption, op_name: opName, op_token: opToken, user_id: profile.user_id, uploader_ip_hash: ipHash, status })
     .select('id').single();
   if (dbErr) {
     console.error('[upload] db:', dbErr);
-    await supabase.storage.from(BUCKET).remove([storagePath]); // don't leave orphan files
+    await supabase.storage.from(BUCKET).remove([storagePath]);
     return res.status(500).json({ error: 'Upload failed. Please try again.' });
   }
 
   res.json({ ok: true, id: photo.id, opName, opToken, status });
-  tick(); // show it right away if the screen is empty
-}));
-
-app.get('/api/my-name', wrap(async (req, res) => {
-  const name = await getPosterName(hashIp(clientIp(req)));
-  res.json({ name: name || null });
+  if (status === 'live') tick();
 }));
 
 app.post('/api/like', likeLimiter, wrap(async (req, res) => {
@@ -375,9 +440,13 @@ app.post('/api/comments', commentLimiter, wrap(async (req, res) => {
   }
 
   let authorName = null, isOp = false;
-  if (opToken) {
-    const { data: photo } = await supabase.from('photos').select('op_token, op_name').eq('id', photoId).maybeSingle();
-    if (photo?.op_token && photo.op_token === opToken) { isOp = true; authorName = photo.op_name; }
+  const me = await optionalUser(req);
+  const { data: photo } = await supabase.from('photos').select('op_token, op_name, user_id').eq('id', photoId).maybeSingle();
+  if (photo && ((me && photo.user_id && photo.user_id === me.user_id) ||
+      (opToken && photo.op_token && photo.op_token === opToken))) {
+    isOp = true; authorName = photo.op_name;
+  } else if (me) {
+    authorName = me.username;
   }
 
   const { data: comment, error } = await supabase.from('comments')
@@ -460,6 +529,27 @@ app.post('/api/admin/moderate-photo', requireAdmin, wrap(async (req, res) => {
   tick(); // if the on-screen photo was just rejected, replace it right away
 }));
 
+app.get('/api/admin/profiles', requireAdmin, wrap(async (req, res) => {
+  const { data, error } = await supabase.from('profiles')
+    .select('user_id, username, ip_hash, created_at').order('created_at', { ascending: false }).limit(200);
+  if (error) return res.status(500).json({ error: 'Failed to fetch users.' });
+  res.json((data || []).map((p) => ({ user_id: p.user_id, username: p.username, locked: !!p.ip_hash, created_at: p.created_at })));
+}));
+
+// Unlock: the account binds to whatever connection it next uploads from
+app.post('/api/admin/profiles/:id/reset-ip', requireAdmin, wrap(async (req, res) => {
+  const { error } = await supabase.from('profiles').update({ ip_hash: null }).eq('user_id', req.params.id);
+  if (error) return res.status(500).json({ error: 'Failed to reset IP lock.' });
+  res.json({ ok: true });
+}));
+
+// Ban: deletes the account (their photos stay but are detached from it)
+app.delete('/api/admin/profiles/:id', requireAdmin, wrap(async (req, res) => {
+  const { error } = await supabase.auth.admin.deleteUser(req.params.id);
+  if (error) return res.status(500).json({ error: 'Failed to delete user.' });
+  res.json({ ok: true });
+}));
+
 app.put('/api/admin/photos/:id', requireAdmin, wrap(async (req, res) => {
   const caption = ((req.body || {}).caption || '').toString().slice(0, 280);
   const { error } = await supabase.from('photos').update({ caption }).eq('id', req.params.id);
@@ -499,10 +589,10 @@ app.use((err, req, res, next) => {
 // ---------- startup self-check: tells you exactly what's missing in Supabase ----------
 async function checkSchema() {
   const checks = {
-    photos: 'id, storage_path, caption, op_name, op_token, uploader_ip_hash, status, created_at',
+    photos: 'id, storage_path, caption, op_name, op_token, user_id, uploader_ip_hash, status, created_at',
     comments: 'id, photo_id, body, author_name, is_op, parent_id, commenter_ip_hash, created_at',
     likes: 'id, photo_id, liker_ip_hash, created_at',
-    posters: 'ip_hash, name',
+    profiles: 'user_id, username, username_lower, ip_hash',
     display_state: 'id, photo_id, started_at',
     display_log: 'id, photo_id, shown_at',
   };
