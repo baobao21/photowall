@@ -5,183 +5,184 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>THE WALL — one photo. ten minutes. fame is earned.</title>
 <style>
-  :root {
-    --bg: #0d0d12; --panel: #16161e; --panel2: #1c1c26;
-    --text: #eaeaf0; --muted: #8a8a9a; --accent: #ffd166; --accent2: #ef476f;
-    --border: #262633;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    background: var(--bg); color: var(--text);
-    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    min-height: 100vh;
-  }
-  header {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 18px 28px; border-bottom: 1px solid var(--border);
-  }
-  .logo { font-weight: 800; font-size: 20px; letter-spacing: 2px; }
-  .logo span { color: var(--accent); }
-  .hint { color: var(--muted); font-size: 13px; }
-  main { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
+  :root {
+    --bg: #0d0d12; --panel: #16161e; --panel2: #1c1c26;
+    --text: #eaeaf0; --muted: #8a8a9a; --accent: #ffd166; --accent2: #ef476f;
+    --border: #262633;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+  }
+  header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 28px; border-bottom: 1px solid var(--border);
+  }
+  .logo { font-weight: 800; font-size: 20px; letter-spacing: 2px; }
+  .logo span { color: var(--accent); }
+  .hint { color: var(--muted); font-size: 13px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
 
-  .stage { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; }
-  @media (max-width: 820px) { .stage { grid-template-columns: 1fr; } }
+  .stage { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; }
+  @media (max-width: 820px) { .stage { grid-template-columns: 1fr; } }
 
-  .screen {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 16px; overflow: hidden; display: flex; flex-direction: column;
-  }
-  .screen-img-wrap {
-    flex: 1; background: #000; display: flex; align-items: center; justify-content: center;
-    min-height: 380px;
-  }
-  .screen-img-wrap img { max-width: 100%; max-height: 62vh; object-fit: contain; display: block; }
-  .empty { color: var(--muted); font-size: 15px; padding: 60px 20px; text-align: center; }
-  .caption { padding: 14px 18px; font-size: 15px; color: var(--text); border-top: 1px solid var(--border); }
-  .caption .op-tag {
-    display: inline-block; background: var(--accent2); color: #fff; font-size: 11px;
-    font-weight: 700; border-radius: 6px; padding: 2px 8px; margin-right: 8px; vertical-align: middle;
-  }
+  .screen {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 16px; overflow: hidden; display: flex; flex-direction: column;
+  }
+  .screen-img-wrap {
+    flex: 1; background: #000; display: flex; align-items: center; justify-content: center;
+    min-height: 380px;
+  }
+  .screen-img-wrap img { max-width: 100%; max-height: 62vh; object-fit: contain; display: block; }
+  .empty { color: var(--muted); font-size: 15px; padding: 60px 20px; text-align: center; }
+  .caption { padding: 14px 18px; font-size: 15px; color: var(--text); border-top: 1px solid var(--border); }
+  .caption .op-tag {
+    display: inline-block; background: var(--accent2); color: #fff; font-size: 11px;
+    font-weight: 700; border-radius: 6px; padding: 2px 8px; margin-right: 8px; vertical-align: middle;
+  }
 
-  .sidebar { display: flex; flex-direction: column; gap: 20px; }
-  .card {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 16px; padding: 20px;
-  }
-  .timer-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; }
-  .timer { font-size: 44px; font-weight: 800; font-variant-numeric: tabular-nums; margin: 6px 0 10px; }
-  .timer.warn { color: var(--accent); }
-  .timer.dead { color: var(--accent2); }
-  .bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
-  .bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width 1s linear; }
+  .sidebar { display: flex; flex-direction: column; gap: 20px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 16px; padding: 20px;
+  }
+  .timer-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; }
+  .timer { font-size: 44px; font-weight: 800; font-variant-numeric: tabular-nums; margin: 6px 0 10px; }
+  .timer.warn { color: var(--accent); }
+  .timer.dead { color: var(--accent2); }
+  .bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
+  .bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width 1s linear; }
 
-  .stats { display: flex; gap: 24px; margin-top: 16px; }
-  .stat b { font-size: 22px; display: block; }
-  .stat small { color: var(--muted); }
+  .stats { display: flex; gap: 24px; margin-top: 16px; }
+  .stat b { font-size: 22px; display: block; }
+  .stat small { color: var(--muted); }
 
-  .like-btn {
-    width: 100%; margin-top: 16px; padding: 14px; border: none; border-radius: 12px;
-    background: var(--accent2); color: #fff; font-size: 16px; font-weight: 700;
-    cursor: pointer; transition: transform .1s ease, opacity .2s;
-  }
-  .like-btn:hover { transform: scale(1.02); }
-  .like-btn:disabled { opacity: .45; cursor: default; transform: none; }
+  .like-btn {
+    width: 100%; margin-top: 16px; padding: 14px; border: none; border-radius: 12px;
+    background: var(--accent2); color: #fff; font-size: 16px; font-weight: 700;
+    cursor: pointer; transition: transform .1s ease, opacity .2s;
+  }
+  .like-btn:hover { transform: scale(1.02); }
+  .like-btn:disabled { opacity: .45; cursor: default; transform: none; }
 
-  .comments { flex: 1; display: flex; flex-direction: column; min-height: 220px; max-height: 340px; }
-  .comments h3 { font-size: 14px; color: var(--muted); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
-  .clist { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; }
-  .clist::-webkit-scrollbar { width: 6px; }
-  .clist::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-  .c-item { background: var(--panel2); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
-  .c-item time { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
-  .op-badge {
-    display: inline-block; background: var(--accent); color: #000; font-size: 10px;
-    font-weight: 800; border-radius: 5px; padding: 1px 7px; margin-right: 6px;
-    letter-spacing: .5px; vertical-align: middle;
-  }
-  .c-name { font-weight: 700; color: var(--accent); margin-right: 6px; }
-  .c-form { display: flex; gap: 8px; margin-top: 12px; }
-  .c-form input {
-    flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
-    padding: 10px 12px; color: var(--text); font-size: 14px; outline: none;
-  }
-  .c-form input:focus { border-color: var(--accent); }
-  .c-form button {
-    background: var(--accent); border: none; border-radius: 10px; padding: 0 18px;
-    font-weight: 700; cursor: pointer;
-  }
-  .c-msg { font-size: 12px; min-height: 16px; margin-top: 8px; }
-  .c-msg.err { color: var(--accent2); }
+  .comments { flex: 1; display: flex; flex-direction: column; min-height: 220px; max-height: 340px; }
+  .comments h3 { font-size: 14px; color: var(--muted); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .clist { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; }
+  .clist::-webkit-scrollbar { width: 6px; }
+  .clist::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  .c-item { background: var(--panel2); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+  .c-item time { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
+  .op-badge {
+    display: inline-block; background: var(--accent); color: #000; font-size: 10px;
+    font-weight: 800; border-radius: 5px; padding: 1px 7px; margin-right: 6px;
+    letter-spacing: .5px; vertical-align: middle;
+  }
+  .c-name { font-weight: 700; color: var(--accent); margin-right: 6px; }
+  .c-form { display: flex; gap: 8px; margin-top: 12px; }
+  .c-form input {
+    flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; color: var(--text); font-size: 14px; outline: none;
+  }
+  .c-form input:focus { border-color: var(--accent); }
+  .c-form button {
+    background: var(--accent); border: none; border-radius: 10px; padding: 0 18px;
+    font-weight: 700; cursor: pointer;
+  }
+  .c-msg { font-size: 12px; min-height: 16px; margin-top: 8px; }
+  .c-msg.err { color: var(--accent2); }
 
-  .upload { margin-top: 20px; }
-  .upload h2 { font-size: 16px; margin-bottom: 4px; }
-  .upload p { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
-  .drop {
-    border: 2px dashed var(--border); border-radius: 12px; padding: 26px;
-    text-align: center; color: var(--muted); cursor: pointer; transition: border-color .2s;
-  }
-  .drop:hover, .drop.over { border-color: var(--accent); color: var(--text); }
-  .drop input { display: none; }
-  .preview { max-height: 140px; border-radius: 10px; margin-top: 12px; display: none; }
-  .u-row { display: flex; gap: 10px; margin-top: 12px; }
-  .u-row input {
-    flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
-    padding: 12px; color: var(--text); font-size: 14px; outline: none;
-  }
-  .u-row button {
-    background: var(--accent2); border: none; border-radius: 10px; padding: 0 22px;
-    color: #fff; font-weight: 700; cursor: pointer;
-  }
-  .msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
-  .msg.ok { color: #6ee7a0; } .msg.err { color: var(--accent2); }
+  .upload { margin-top: 20px; }
+  .upload h2 { font-size: 16px; margin-bottom: 4px; }
+  .upload p { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .drop {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 26px;
+    text-align: center; color: var(--muted); cursor: pointer; transition: border-color .2s;
+    display: block;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); color: var(--text); }
+  .drop input { display: none; }
+  .preview { max-height: 140px; border-radius: 10px; margin-top: 12px; display: none; margin-left: auto; margin-right: auto; }
+  .u-row { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  .u-row input {
+    flex: 1; min-width: 200px; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; color: var(--text); font-size: 14px; outline: none;
+  }
+  .u-row button {
+    background: var(--accent2); border: none; border-radius: 10px; padding: 0 22px;
+    color: #fff; font-weight: 700; cursor: pointer;
+  }
+  .msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
+  .msg.ok { color: #6ee7a0; } .msg.err { color: var(--accent2); }
 
-  footer { padding: 24px; text-align: center; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
-  .pulse { animation: pulse .5s ease; }
-  @keyframes pulse { 50% { transform: scale(1.12); } }
+  footer { padding: 24px; text-align: center; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
+  .pulse { animation: pulse .5s ease; }
+  @keyframes pulse { 50% { transform: scale(1.12); } }
 </style>
 <base target="_blank">
 </head>
 <body>
 
 <header>
-  <div class="logo">THE<span>WALL</span></div>
-  <div class="hint">1 like = +5 min · 1 comment = +10 min</div>
+  <div class="logo">THE<span>WALL</span></div>
+  <div class="hint">1 like = +5 min · 1 comment = +10 min</div>
 </header>
 
 <main>
-  <div class="stage">
-    <div class="screen">
-      <div class="screen-img-wrap" id="imgWrap">
-        <div class="empty">Waiting for the first photo…<br>Upload one below.</div>
-      </div>
-      <div class="caption" id="caption" style="display:none"></div>
-    </div>
+  <div class="stage">
+    <div class="screen">
+      <div class="screen-img-wrap" id="imgWrap">
+        <div class="empty">Waiting for the first photo…<br>Upload one below.</div>
+      </div>
+      <div class="caption" id="caption" style="display:none"></div>
+    </div>
 
-    <div class="sidebar">
-      <div class="card">
-        <div class="timer-label">Time left on screen</div>
-        <div class="timer" id="timer">--:--</div>
-        <div class="bar"><div id="bar" style="width:0%"></div></div>
-        <div class="stats">
-          <div class="stat"><b id="likeCount">0</b><small>likes · +5 min</small></div>
-          <div class="stat"><b id="commentCount">0</b><small>comments · +10 min</small></div>
-        </div>
-        <button class="like-btn" id="likeBtn" disabled>❤ Like this photo</button>
-      </div>
+    <div class="sidebar">
+      <div class="card">
+        <div class="timer-label">Time left on screen</div>
+        <div class="timer" id="timer">--:--</div>
+        <div class="bar"><div id="bar" style="width:0%"></div></div>
+        <div class="stats">
+          <div class="stat"><b id="likeCount">0</b><small>likes · +5 min</small></div>
+          <div class="stat"><b id="commentCount">0</b><small>comments · +10 min</small></div>
+        </div>
+        <button class="like-btn" id="likeBtn" disabled>❤ Like this photo</button>
+      </div>
 
-      <div class="card comments">
-        <h3>Comments</h3>
-        <div class="clist" id="clist"><div class="empty" style="padding:10px">No comments yet.</div></div>
-        <form class="c-form" id="cform">
-          <input id="cinput" maxlength="500" placeholder="Say something nice…" autocomplete="off">
-          <button type="submit">Post</button>
-        </form>
-        <div class="c-msg" id="cmsg"></div>
-      </div>
-    </div>
-  </div>
+      <div class="card comments">
+        <h3>Comments</h3>
+        <div class="clist" id="clist"><div class="empty" style="padding:10px">No comments yet.</div></div>
+        <form class="c-form" id="cform">
+          <input id="cinput" maxlength="500" placeholder="Say something nice…" autocomplete="off">
+          <button type="submit">Post</button>
+        </form>
+        <div class="c-msg" id="cmsg"></div>
+      </div>
+    </div>
+  </div>
 
-  <div class="card upload">
-    <h2>Put your photo in the queue</h2>
-    <p>Every 10 minutes a random photo takes the screen. If people like it, it stays longer.</p>
-    <label class="drop" id="drop">
-      <input type="file" id="file" accept="image/jpeg,image/png,image/webp,image/gif">
-      <span id="dropText">Click or drop a photo here (max 8 MB)</span>
-      <img class="preview" id="preview" alt="">
-    </label>
-    <div class="u-row">
-      <input id="nameInput" maxlength="20" placeholder="Your name (optional — we'll make one up if blank)" style="max-width:320px">
-      <input id="captionInput" maxlength="280" placeholder="Optional caption (280 chars)">
-      <button id="uploadBtn">Upload</button>
-    </div>
-    <div class="msg" id="umsg"></div>
-  </div>
+  <div class="card upload">
+    <h2>Put your photo in the queue</h2>
+    <p>Every 10 minutes a random photo takes the screen. If people like it, it stays longer.</p>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept="image/jpeg,image/png,image/webp,image/gif">
+      <span id="dropText">Click or drop a photo here (max 8 MB)</span>
+      <img class="preview" id="preview" alt="Preview">
+    </label>
+    <div class="u-row">
+      <input id="nameInput" maxlength="20" placeholder="Your name (optional)">
+      <input id="captionInput" maxlength="280" placeholder="Optional caption (280 chars)">
+      <button id="uploadBtn">Upload</button>
+    </div>
+    <div class="msg" id="umsg"></div>
+  </div>
 </main>
 
 <footer>
-  IPs are stored only as salted hashes, used for spam prevention, and purged after 30 days.
-  Max 5 comments per photo · 15s between comments · VPN/proxy likes &amp; comments blocked.
+  IPs are stored only as salted hashes, used for spam prevention, and purged after 30 days.<br>
+  Max 5 comments per photo · 15s between comments · VPN/proxy likes &amp; comments blocked.
 </footer>
 
 <script>
@@ -191,188 +192,182 @@ let liked = JSON.parse(localStorage.getItem('liked') || '{}');
 let lastSeenSeconds = null;
 
 const fmt = (s) => {
-  s = Math.max(0, s);
-  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  s = Math.max(0, s);
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 };
 
-// --- OP identity: map of photoId -> { opName, opToken }, stored in this browser ---
 function myPhotos() { return JSON.parse(localStorage.getItem('myPhotos') || '{}'); }
 function saveMyPhoto(id, opName, opToken) {
-  const m = myPhotos(); m[id] = { opName, opToken };
-  localStorage.setItem('myPhotos', JSON.stringify(m));
+  const m = myPhotos(); m[id] = { opName, opToken };
+  localStorage.setItem('myPhotos', JSON.stringify(m));
 }
 function myPhoto(id) { return myPhotos()[id] || null; }
 
 function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  if (!s) return '';
+  return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
 function commentHtml(c) {
-  const badge = c.is_op
-    ? '<span class="op-badge">★ OP</span><span class="c-name">' + escapeHtml(c.author_name || '') + '</span>'
-    : '';
-  return '<div class="c-item">' + badge + escapeHtml(c.body) +
-         '<time>' + new Date(c.created_at).toLocaleString() + '</time></div>';
+  const badge = c.is_op
+    ? '<span class="op-badge">★ OP</span><span class="c-name">' + escapeHtml(c.author_name || '') + '</span>'
+    : '<span class="c-name">' + escapeHtml(c.author_name || 'Anonymous') + '</span>';
+  return '<div class="c-item">' + badge + escapeHtml(c.body) +
+         '<time>' + new Date(c.created_at).toLocaleString() + '</time></div>';
 }
 
 async function refresh() {
-  try {
-    const res = await fetch('/api/current');
-    const data = await res.json();
-    const newPhotoId = data.photo && data.photo.id;
-    const oldPhotoId = state.photo && state.photo.id;
-    state = data;
+  try {
+    const res = await fetch('/api/current');
+    const data = await res.json();
+    const newPhotoId = data.photo && data.photo.id;
+    const oldPhotoId = state.photo && state.photo.id;
+    state = data;
 
-    if (newPhotoId !== oldPhotoId) {
-      if (newPhotoId) {
-        $('imgWrap').innerHTML = '';
-        const img = document.createElement('img');
-        img.src = data.photo.url;
-        img.alt = data.photo.caption || 'photo';
-        $('imgWrap').appendChild(img);
-        const cap = $('caption');
-        cap.style.display = data.photo.caption || data.photo.opName ? 'block' : 'none';
-        cap.innerHTML = (data.photo.opName ? '<span class="op-tag">by ' + escapeHtml(data.photo.opName) + '</span>' : '')
-                        + escapeHtml(data.photo.caption || '');
-        loadComments(newPhotoId);
-        $('cmsg').textContent = '';
-      } else {
-        $('imgWrap').innerHTML = '<div class="empty">Waiting for the next photo…</div>';
-        $('caption').style.display = 'none';
-      }
-    }
+    if (newPhotoId !== oldPhotoId) {
+      if (newPhotoId) {
+        $('imgWrap').innerHTML = '';
+        const img = document.createElement('img');
+        img.src = data.photo.url;
+        img.alt = data.photo.caption || 'photo';
+        $('imgWrap').appendChild(img);
+        const cap = $('caption');
+        cap.style.display = data.photo.caption || data.photo.opName ? 'block' : 'none';
+        cap.innerHTML = (data.photo.opName ? '<span class="op-tag">by ' + escapeHtml(data.photo.opName) + '</span>' : '')
+                        + escapeHtml(data.photo.caption || '');
+        loadComments(newPhotoId);
+        $('cmsg').textContent = '';
+      } else {
+        $('imgWrap').innerHTML = '<div class="empty">Waiting for the next photo…</div>';
+        $('caption').style.display = 'none';
+      }
+    }
 
-    $('likeCount').textContent = data.engagement.likes;
-    $('commentCount').textContent = data.engagement.comments;
+    $('likeCount').textContent = data.engagement.likes;
+    $('commentCount').textContent = data.engagement.comments;
 
-    const btn = $('likeBtn');
-    btn.disabled = !newPhotoId || !!liked[newPhotoId];
-    btn.textContent = (newPhotoId && liked[newPhotoId]) ? '✓ Liked' : '❤ Like this photo';
+    const btn = $('likeBtn');
+    btn.disabled = !newPhotoId || !!liked[newPhotoId];
+    btn.textContent = (newPhotoId && liked[newPhotoId]) ? '✓ Liked' : '❤ Like this photo';
 
-    if (lastSeenSeconds !== null && data.remainingSeconds > lastSeenSeconds + 3) {
-      $('timer').classList.add('pulse');
-      setTimeout(() => $('timer').classList.remove('pulse'), 600);
-    }
-    lastSeenSeconds = data.remainingSeconds;
-  } catch (e) {}
+    if (lastSeenSeconds !== null && data.remainingSeconds > lastSeenSeconds + 3) {
+      $('timer').classList.add('pulse');
+      setTimeout(() => $('timer').classList.remove('pulse'), 600);
+    }
+    lastSeenSeconds = data.remainingSeconds;
+  } catch (e) {}
 }
 
 async function loadComments(photoId) {
-  try {
-    const res = await fetch('/api/photos/' + photoId + '/comments');
-    const list = await res.json();
-    $('clist').innerHTML = list.length
-      ? list.map(commentHtml).join('')
-      : '<div class="empty" style="padding:10px">No comments yet.</div>';
-  } catch (e) {}
+  try {
+    const res = await fetch('/api/photos/' + photoId + '/comments');
+    const list = await res.json();
+    $('clist').innerHTML = list.length
+      ? list.map(commentHtml).join('')
+      : '<div class="empty" style="padding:10px">No comments yet.</div>';
+  } catch (e) {}
 }
 
-// countdown
+// Countdown timer
 setInterval(() => {
-  if (!state.photo) { $('timer').textContent = '--:--'; $('bar').style.width = '0%'; return; }
-  if (state.remainingSeconds > 0) state.remainingSeconds--;
-  $('timer').textContent = fmt(state.remainingSeconds);
-  $('timer').className = 'timer' + (state.remainingSeconds === 0 ? ' dead' : state.remainingSeconds < 60 ? ' warn' : '');
-  $('bar').style.width = Math.min(100, (state.remainingSeconds / 600) * 100) + '%';
-  if (state.remainingSeconds === 0) $('timer').textContent = 'NEXT…';
+  if (!state.photo) { $('timer').textContent = '--:--';$('bar').style.width = '0%'; return; }
+  if (state.remainingSeconds > 0) state.remainingSeconds--;
+  $('timer').textContent = fmt(state.remainingSeconds);
+  $('timer').className = 'timer' + (state.remainingSeconds === 0 ? ' dead' : state.remainingSeconds < 60 ? ' warn' : '');$('bar').style.width = Math.min(100, (state.remainingSeconds / 600) * 100) + '%';
+  if (state.remainingSeconds === 0) $('timer').textContent = 'NEXT…';
 }, 1000);
 
 setInterval(refresh, 4000);
 
 $('likeBtn').onclick = async () => {
-  if (!state.photo) return;
-  try {
-    const res = await fetch('/api/like', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ photoId: state.photo.id }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok || res.status === 409) {
-      liked[state.photo.id] = true;
-      localStorage.setItem('liked', JSON.stringify(liked));
-      refresh();
-    } else if (data.error) {
-      $('cmsg').textContent = data.error;
-      $('cmsg').className = 'c-msg err';
-    }
-  } catch (e) {}
+  if (!state.photo) return;
+  try {
+    const res = await fetch('/api/like', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ photoId: state.photo.id }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok || res.status === 409) {
+      liked[state.photo.id] = true;
+      localStorage.setItem('liked', JSON.stringify(liked));
+      refresh();
+    } else if (data.error) {
+      $('cmsg').textContent = data.error;
+      $('cmsg').className = 'c-msg err';
+    }
+  } catch (e) {}
 };
 
 $('cform').onsubmit = async (e) => {
-  e.preventDefault();
-  const body = $('cinput').value.trim();
-  if (!body || !state.photo) return;
-  const mine = myPhoto(state.photo.id);
-  try {
-    const res = await fetch('/api/comments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ photoId: state.photo.id, body, opToken: mine ? mine.opToken : undefined }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-      $('cinput').value = '';
-      $('cmsg').textContent = '';
-      refresh();
-      loadComments(state.photo.id);
-    } else {
-      $('cmsg').textContent = data.error || 'Comment failed.';
-      $('cmsg').className = 'c-msg err';
-    }
-  } catch (e) {}
+  e.preventDefault();
+  const body = $('cinput').value.trim();
+  if (!body || !state.photo) return;
+  const mine = myPhoto(state.photo.id);
+  try {
+    const res = await fetch('/api/comments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ photoId: state.photo.id, body, opToken: mine ? mine.opToken : undefined }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      $('cinput').value = '';$('cmsg').textContent = '';
+      refresh();
+      loadComments(state.photo.id);
+    } else {
+      $('cmsg').textContent = data.error \vert{}\vert{} 'Comment failed.';$('cmsg').className = 'c-msg err';
+    }
+  } catch (e) {}
 };
 
-// upload
+// Upload & drag-drop logic
 let pickedFile = null;
-const drop = $('drop'), fileInput = $('file');
+const drop = $('drop'), fileInput =$('file');
 
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
 drop.addEventListener('drop', (e) => {
-  e.preventDefault(); drop.classList.remove('over');
-  if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]);
+  e.preventDefault(); drop.classList.remove('over');
+  if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]);
 });
 fileInput.addEventListener('change', () => fileInput.files[0] && pickFile(fileInput.files[0]));
 
 function pickFile(f) {
-  if (f.size > 8 * 1024 * 1024) return umsg('File too big (max 8 MB).', false);
-  pickedFile = f;
-  $('dropText').textContent = f.name;
-  const img = $('preview');
-  img.src = URL.createObjectURL(f);
-  img.style.display = 'block';
+  if (f.size > 8 * 1024 * 1024) return umsg('File too big (max 8 MB).', false);
+  pickedFile = f;
+  $('dropText').textContent = f.name;
+  const img = $('preview');
+  img.src = URL.createObjectURL(f);
+  img.style.display = 'block';
 }
 
 function umsg(text, ok) {
-  const el = $('umsg');
-  el.textContent = text;
-  el.className = 'msg ' + (ok ? 'ok' : 'err');
+  const el = $('umsg');
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
 }
 
 $('uploadBtn').onclick = async () => {
-  if (!pickedFile) return umsg('Pick a photo first.', false);
-  umsg('Uploading…', true);
-  const fd = new FormData();
-  fd.append('photo', pickedFile);
-  fd.append('caption', $('captionInput').value);
-  fd.append('opName', $('nameInput').value);
-  try {
-    const res = await fetch('/api/upload', { method: 'POST', body: fd });
-    const data = await res.json();
-    if (res.ok) {
-      // Save the secret token — this browser can now prove it's the OP of this photo
-      saveMyPhoto(data.id, data.opName, data.opToken);
-      umsg(`Uploaded as "${data.opName}"! It will appear on the wall soon.`, true);
-      pickedFile = null; fileInput.value = '';
-      $('preview').style.display = 'none';
-      $('dropText').textContent = 'Click or drop a photo here (max 8 MB)';
-      $('captionInput').value = '';
-      $('nameInput').value = '';
-    } else {
-      umsg(data.error || 'Upload failed.', false);
-    }
-  } catch (e) { umsg('Network error. Try again.', false); }
+  if (!pickedFile) return umsg('Pick a photo first.', false);
+  umsg('Uploading…', true);
+  const fd = new FormData();
+  fd.append('photo', pickedFile);
+  fd.append('caption', $('captionInput').value);
+  fd.append('opName', $('nameInput').value);
+  try {
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (res.ok) {
+      saveMyPhoto(data.id, data.opName, data.opToken);
+      umsg(`Uploaded as "${data.opName}"! It will appear on the wall soon.`, true);
+      pickedFile = null; fileInput.value = '';
+      $('preview').style.display = 'none';$('dropText').textContent = 'Click or drop a photo here (max 8 MB)';
+      $('captionInput').value = '';$('nameInput').value = '';
+    } else {
+      umsg(data.error || 'Upload failed.', false);
+    }
+  } catch (e) { umsg('Network error. Try again.', false); }
 };
 
 refresh();
