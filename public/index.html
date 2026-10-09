@@ -262,12 +262,13 @@ function renderCommentTree(list) {
 }
 
 function toggleReplyBox(commentId) {
-  const box = $(`reply-box-${commentId}`);
-  box.style.display = box.style.display === 'none' ? 'flex' : 'none';
+  const box = document.getElementById(`reply-box-${commentId}`);
+  if (box) box.style.display = box.style.display === 'none' ? 'flex' : 'none';
 }
 
 async function submitReply(parentId) {
-  const input = $(`reply-input-${parentId}`);
+  const input = document.getElementById(`reply-input-${parentId}`);
+  if (!input) return;
   const body = input.value.trim();
   if (!body || !state.photo) return;
   
@@ -392,7 +393,7 @@ $('cform').onsubmit = async (e) => {
 };
 
 let pickedFile = null;
-const drop = $('drop'), fileInput =$('file');
+const drop = $('drop'), fileInput = document.getElementById('file');
 
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
@@ -400,7 +401,9 @@ drop.addEventListener('drop', (e) => {
   e.preventDefault(); drop.classList.remove('over');
   if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]);
 });
-fileInput.addEventListener('change', () => fileInput.files[0] && pickFile(fileInput.files[0]));
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) pickFile(fileInput.files[0]);
+});
 
 function pickFile(f) {
   if (f.size > 8 * 1024 * 1024) return umsg('File too big (max 8 MB).', false);
