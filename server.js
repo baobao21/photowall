@@ -26,7 +26,7 @@ const LIKE_MINUTES = 5;       // +5 min per like
 const COMMENT_MINUTES = 10;   // +10 min per comment
 const REPEAT_EXCLUSION_HOURS = 24;
 
-// ---------- anti-spam rules ----------
+// ---------- anti-spam & moderation rules ----------
 const COMMENTS_PER_PHOTO_PER_IP = 5;      // max comments one IP can leave on a single photo
 const COMMENTS_PER_DAY_PER_IP = 40;       // global daily comment cap per IP
 const COMMENT_COOLDOWN_SECONDS = 15;      // min seconds between comments from one IP
@@ -57,10 +57,14 @@ const clientIp = (req) =>
 const hashIp = (ip) =>
   crypto.createHash('sha256').update(`${ip}:${IP_SALT}`).digest('hex');
 
+// --- Malicious link & spam blocker function (Moved to top so it's defined before use) ---
+function containsMaliciousContent(text) {
+  if (!text) return false;
+  const urlRegex = /(https?:\/\/|www\.|[a-zA-Z0-9-]+\.(com|net|org|ru|xyz|top|cn|info|tk))/i;
+  return urlRegex.test(text);
+}
+
 // ---------- VPN / proxy detection ----------
-// Uses proxycheck.io free API (get a key at proxycheck.io, ~100 checks/day free).
-// If VPNCHECK_API_KEY is not set, the check is skipped and only behavioral rules apply.
-// Results are cached per IP for 24h so you don't burn your daily quota.
 const vpnCache = new Map(); // ipHash -> { bad: boolean, at: number }
 
 async function isBadIp(ip) {
@@ -84,7 +88,7 @@ async function isBadIp(ip) {
       (parseInt(info.risk, 10) || 0) >= 80
     );
   } catch {
-    bad = false; // fail-open: if the check service is down, don't block real users
+    bad = false;
   }
   vpnCache.set(key, { bad, at: Date.now() });
   if (bad) console.log(`[vpn-check] blocked ${ip} (vpn/proxy/tor)`);
@@ -156,14 +160,11 @@ async function getCurrentDisplay() {
 async function pickNextPhoto() {
   const get = async (hours) => {
     const { data } = await supabase.rpc('pick_next_photo', { excl_hours: hours });
-    // rpc returns an ARRAY for setof functions — take the first row
     return Array.isArray(data) ? data[0] : data;
   };
   return (await get(REPEAT_EXCLUSION_HOURS)) || (await get(0));
 }
 
-// The heart of the app. Runs every 30s: if the current photo's time is up
-// (base time + engagement bonus), crown a new random one.
 async function tick() {
   try {
     const current = await getCurrentDisplay();
@@ -216,11 +217,12 @@ app.post('/api/upload', uploadLimiter, upload.single('photo'), async (req, res) 
 
     const caption = (req.body.caption || '').toString().slice(0, 280);
     if (containsMaliciousContent(caption)) {
-    return res.status(400).json({ error: 'Captions cannot contain links or promotional URLs.' });
+      return res.status(400).json({ error: 'Captions cannot contain links or promotional URLs.' });
     }
+
     const requestedName = (req.body.opName || '').toString().trim().slice(0, 20);
-    const opName = requestedName || generateName();   // every uploader gets a name
-    const opToken = crypto.randomUUID();              // secret token proving "I uploaded this"
+    const opName = requestedName || generateName();
+    const opToken = crypto.randomUUID();
 
     const storagePath = `uploads/${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
     const { error: upErr } = await supabase.storage
@@ -241,7 +243,6 @@ app.post('/api/upload', uploadLimiter, upload.single('photo'), async (req, res) 
       .single();
     if (dbErr) throw dbErr;
 
-    // opToken is returned ONCE — the browser saves it to claim the OP badge later
     res.json({ ok: true, id: photo.id, opName, opToken });
   } catch (err) {
     console.error('[upload]', err);
@@ -259,7 +260,6 @@ app.post('/api/like', likeLimiter, async (req, res) => {
     return res.status(403).json({ error: 'Likes are disabled on VPN/proxy connections.' });
   }
 
-  // daily like cap per IP
   const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const { count: likesToday } = await supabase.from('likes')
     .select('*', { count: 'exact', head: true })
@@ -285,9 +285,11 @@ app.post('/api/like', likeLimiter, async (req, res) => {
 app.post('/api/comments', commentLimiter, async (req, res) => {
   const { photoId, body, opToken } = req.body || {};
   const text = (body || '').toString().trim().slice(0, 500);
+  
   if (containsMaliciousContent(text)) {
-  return res.status(400).json({ error: 'Comments cannot contain links or external URLs.' });
-}
+    return res.status(400).json({ error: 'Comments cannot contain links or external URLs.' });
+  }
+  
   if (!photoId || !text) {
     return res.status(400).json({ error: 'photoId and a comment body are required.' });
   }
@@ -295,12 +297,10 @@ app.post('/api/comments', commentLimiter, async (req, res) => {
   const ip = clientIp(req);
   const ipHash = hashIp(ip);
 
-  // Rule 0: VPN / proxy / Tor check
   if (await isBadIp(ip)) {
     return res.status(403).json({ error: 'Comments are disabled on VPN/proxy connections.' });
   }
 
-  // Rule 1: cooldown — one comment per IP every N seconds
   const { data: lastComment } = await supabase.from('comments')
     .select('created_at').eq('commenter_ip_hash', ipHash)
     .order('created_at', { ascending: false })
@@ -309,7 +309,6 @@ app.post('/api/comments', commentLimiter, async (req, res) => {
     return res.status(429).json({ error: `Please wait ${COMMENT_COOLDOWN_SECONDS} seconds between comments.` });
   }
 
-  // Rule 2: max comments per photo per IP
   const { count: onPhoto } = await supabase.from('comments')
     .select('*', { count: 'exact', head: true })
     .eq('photo_id', photoId).eq('commenter_ip_hash', ipHash);
@@ -317,7 +316,6 @@ app.post('/api/comments', commentLimiter, async (req, res) => {
     return res.status(429).json({ error: `Max ${COMMENTS_PER_PHOTO_PER_IP} comments per photo.` });
   }
 
-  // Rule 3: global daily cap per IP
   const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const { count: today } = await supabase.from('comments')
     .select('*', { count: 'exact', head: true })
@@ -327,7 +325,6 @@ app.post('/api/comments', commentLimiter, async (req, res) => {
     return res.status(429).json({ error: 'Daily comment limit reached. Come back tomorrow.' });
   }
 
-  // OP verification: does the supplied token match this photo's uploader token?
   let authorName = null;
   let isOp = false;
   if (opToken) {
@@ -362,8 +359,6 @@ app.get('/api/photos/:id/comments', async (req, res) => {
   res.json(data || []);
 });
 
-// Optional: external cron (e.g. cron-job.org every minute) can hit this to
-// wake a sleeping free-tier instance and force a scheduler check.
 app.post('/api/tick', (req, res) => {
   if (req.headers['x-cron-secret'] !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'unauthorized' });
@@ -372,40 +367,20 @@ app.post('/api/tick', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- go ----------
-setInterval(tick, 30 * 1000);
-app.listen(PORT, () => console.log(`photowall running on :${PORT}`));
-
-// --- Admin Authentication & Moderation ---
+// --- Admin Authentication & Moderation Routes ---
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change-this-secure-password';
-
-// Simple session store for admin tokens
 const adminSessions = new Set();
 
-// Malicious link & spam blocker function
-function containsMaliciousContent(text) {
-  if (!text) return false;
-  // Regex to detect URLs, IP addresses, or common phishing/spam patterns
-  const urlRegex = /(https?:\/\/|www\.|[a-zA-Z0-9-]+\.(com|net|org|ru|xyz|top|cn|info|tk))/i;
-  return urlRegex.test(text);
-}
-
-
-
-
-// Admin Login Route
 app.post('/api/admin/login', (req, res) => {
   const { password } = req.body || {};
   if (password === ADMIN_PASSWORD) {
     const token = crypto.randomBytes(32).toString('hex');
     adminSessions.add(token);
-    // Send token back (or set as secure cookie)
     return res.json({ ok: true, token });
   }
   res.status(401).json({ error: 'Invalid admin password.' });
 });
 
-// Middleware to check admin token
 const requireAdmin = (req, res, next) => {
   const token = req.headers['x-admin-token'];
   if (token && adminSessions.has(token)) {
@@ -414,7 +389,6 @@ const requireAdmin = (req, res, next) => {
   res.status(401).json({ error: 'Unauthorized.' });
 };
 
-// Get pending/all photos for moderation
 app.get('/api/admin/photos', requireAdmin, async (req, res) => {
   const { data, error } = await supabase
     .from('photos')
@@ -425,7 +399,6 @@ app.get('/api/admin/photos', requireAdmin, async (req, res) => {
   res.json(data);
 });
 
-// Moderate photo status (e.g., set status to 'rejected' or 'live')
 app.post('/api/admin/moderate-photo', requireAdmin, async (req, res) => {
   const { photoId, status } = req.body;
   if (!['pending', 'live', 'archived', 'rejected'].includes(status)) {
@@ -439,7 +412,6 @@ app.post('/api/admin/moderate-photo', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Delete a comment
 app.delete('/api/admin/comments/:id', requireAdmin, async (req, res) => {
   const { error } = await supabase
     .from('comments')
@@ -448,3 +420,7 @@ app.delete('/api/admin/comments/:id', requireAdmin, async (req, res) => {
   if (error) return res.status(500).json({ error: 'Failed to delete comment.' });
   res.json({ ok: true });
 });
+
+// ---------- go ----------
+setInterval(tick, 30 * 1000);
+app.listen(PORT, () => console.log(`photowall running on :${PORT}`));
