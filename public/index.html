@@ -240,7 +240,6 @@ function renderCommentTree(list) {
   return parents.map(p => {
     const pBadge = p.is_op ? '<span class="op-badge">★ OP</span><span class="c-name">' + escapeHtml(p.author_name || 'Anonymous') + '</span>' : '<span class="c-name">' + escapeHtml(p.author_name || 'Anonymous') + '</span>';
     
-    // Find children replies
     const childReplies = replies.filter(r => r.parent_id === p.id);
     const repliesHtml = childReplies.length > 0 ? `<div class="reply-list">` + childReplies.map(r => {
       const rBadge = r.is_op ? '<span class="op-badge">★ OP</span><span class="c-name">' + escapeHtml(r.author_name || 'Anonymous') + '</span>' : '<span class="c-name">' + escapeHtml(r.author_name || 'Anonymous') + '</span>';
@@ -340,7 +339,6 @@ async function loadComments(photoId) {
   } catch (e) {}
 }
 
-// Countdown timer interval
 setInterval(() => {
   if (!state.photo) { $('timer').textContent = '--:--';$('bar').style.width = '0%'; return; }
   if (state.remainingSeconds > 0) state.remainingSeconds--;
@@ -393,7 +391,6 @@ $('cform').onsubmit = async (e) => {
   } catch (e) {}
 };
 
-// Upload logic
 let pickedFile = null;
 const drop = $('drop'), fileInput =$('file');
 
