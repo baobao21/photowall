@@ -17,6 +17,15 @@ create table if not exists photos (
 alter table photos add column if not exists op_name text;
 alter table photos add column if not exists op_token text;
 
+-- One permanent name per IP hash. Names are also unique (case-insensitive)
+-- so nobody else can take or impersonate a name.
+create table if not exists posters (
+  ip_hash text primary key,
+  name text not null,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists posters_name_lower_idx on posters (lower(name));
+
 create table if not exists likes (
   id bigint generated always as identity primary key,
   photo_id uuid not null references photos(id) on delete cascade,
