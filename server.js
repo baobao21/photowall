@@ -13,7 +13,14 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
 }
 const app = express();
 const PORT = process.env.PORT || 3000;
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+// supabase-js initialises a realtime (WebSocket) client even though we never use it.
+// Node < 22 has no built-in WebSocket, so fall back to the "ws" package there.
+const realtimeOpts = {};
+if (typeof WebSocket === 'undefined') {
+  try { realtimeOpts.transport = require('ws'); } catch { /* Node 22+ doesn't need it */ }
+}
+const clientOpts = { realtime: realtimeOpts, auth: { persistSession: false, autoRefreshToken: false } };
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, clientOpts);
 const BUCKET = process.env.SUPABASE_BUCKET || 'photos';
 // New uploads wait for admin approval unless you explicitly set REQUIRE_APPROVAL=false
 const REQUIRE_APPROVAL = process.env.REQUIRE_APPROVAL !== 'false';
@@ -293,7 +300,7 @@ app.post('/api/auth/login', loginLimiter, wrap(async (req, res) => {
   if (!em || typeof password !== 'string') return res.status(400).json({ error: 'Email and password required.' });
   // fresh client each time so a user's session never leaks into our service-role client
   const authClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { persistSession: false, autoRefreshToken: false } });
+    clientOpts);
   const { data, error } = await authClient.auth.signInWithPassword({ email: em, password });
   if (error || !data?.user) return res.status(401).json({ error: 'Invalid email or password.' });
   const profile = await getProfile(data.user.id);
