@@ -1,10 +1,11 @@
 services:
   - type: web
     name: photowall
-    env: node
-    plan: starter          # free tier sleeps; see README for the free workaround
+    runtime: node
+    plan: starter          # free tier sleeps; use an external cron to hit /api/tick if you go free
     buildCommand: npm install
     startCommand: node server.js
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: "20"
@@ -18,3 +19,9 @@ services:
         sync: false
       - key: CRON_SECRET
         sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: VPNCHECK_API_KEY   # optional (proxycheck.io); leave empty to disable VPN blocking
+        sync: false
+      - key: REQUIRE_APPROVAL   # "true" = new uploads wait for admin approval
+        value: "false"
