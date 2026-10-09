@@ -25,9 +25,7 @@
   .hint { color: var(--muted); font-size: 13px; }
   main { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
 
-  .stage {
-    display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px;
-  }
+  .stage { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; }
   @media (max-width: 820px) { .stage { grid-template-columns: 1fr; } }
 
   .screen {
@@ -41,6 +39,10 @@
   .screen-img-wrap img { max-width: 100%; max-height: 62vh; object-fit: contain; display: block; }
   .empty { color: var(--muted); font-size: 15px; padding: 60px 20px; text-align: center; }
   .caption { padding: 14px 18px; font-size: 15px; color: var(--text); border-top: 1px solid var(--border); }
+  .caption .op-tag {
+    display: inline-block; background: var(--accent2); color: #fff; font-size: 11px;
+    font-weight: 700; border-radius: 6px; padding: 2px 8px; margin-right: 8px; vertical-align: middle;
+  }
 
   .sidebar { display: flex; flex-direction: column; gap: 20px; }
   .card {
@@ -73,6 +75,12 @@
   .clist::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   .c-item { background: var(--panel2); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
   .c-item time { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
+  .op-badge {
+    display: inline-block; background: var(--accent); color: #000; font-size: 10px;
+    font-weight: 800; border-radius: 5px; padding: 1px 7px; margin-right: 6px;
+    letter-spacing: .5px; vertical-align: middle;
+  }
+  .c-name { font-weight: 700; color: var(--accent); margin-right: 6px; }
   .c-form { display: flex; gap: 8px; margin-top: 12px; }
   .c-form input {
     flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
@@ -83,6 +91,8 @@
     background: var(--accent); border: none; border-radius: 10px; padding: 0 18px;
     font-weight: 700; cursor: pointer;
   }
+  .c-msg { font-size: 12px; min-height: 16px; margin-top: 8px; }
+  .c-msg.err { color: var(--accent2); }
 
   .upload { margin-top: 20px; }
   .upload h2 { font-size: 16px; margin-bottom: 4px; }
@@ -110,6 +120,7 @@
   .pulse { animation: pulse .5s ease; }
   @keyframes pulse { 50% { transform: scale(1.12); } }
 </style>
+<base target="_blank">
 </head>
 <body>
 
@@ -120,7 +131,6 @@
 
 <main>
   <div class="stage">
-    <!-- Big screen -->
     <div class="screen">
       <div class="screen-img-wrap" id="imgWrap">
         <div class="empty">Waiting for the first photo…<br>Upload one below.</div>
@@ -128,7 +138,6 @@
       <div class="caption" id="caption" style="display:none"></div>
     </div>
 
-    <!-- Side panel -->
     <div class="sidebar">
       <div class="card">
         <div class="timer-label">Time left on screen</div>
@@ -148,11 +157,11 @@
           <input id="cinput" maxlength="500" placeholder="Say something nice…" autocomplete="off">
           <button type="submit">Post</button>
         </form>
+        <div class="c-msg" id="cmsg"></div>
       </div>
     </div>
   </div>
 
-  <!-- Upload -->
   <div class="card upload">
     <h2>Put your photo in the queue</h2>
     <p>Every 10 minutes a random photo takes the screen. If people like it, it stays longer.</p>
@@ -162,6 +171,7 @@
       <img class="preview" id="preview" alt="">
     </label>
     <div class="u-row">
+      <input id="nameInput" maxlength="20" placeholder="Your name (optional — we'll make one up if blank)" style="max-width:320px">
       <input id="captionInput" maxlength="280" placeholder="Optional caption (280 chars)">
       <button id="uploadBtn">Upload</button>
     </div>
@@ -170,7 +180,8 @@
 </main>
 
 <footer>
-  IPs are stored only as salted hashes, used to prevent duplicate likes, and purged after 30 days. Be kind — uploads are moderated.
+  IPs are stored only as salted hashes, used for spam prevention, and purged after 30 days.
+  Max 5 comments per photo · 15s between comments · VPN/proxy likes &amp; comments blocked.
 </footer>
 
 <script>
@@ -184,13 +195,32 @@ const fmt = (s) => {
   return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 };
 
+// --- OP identity: map of photoId -> { opName, opToken }, stored in this browser ---
+function myPhotos() { return JSON.parse(localStorage.getItem('myPhotos') || '{}'); }
+function saveMyPhoto(id, opName, opToken) {
+  const m = myPhotos(); m[id] = { opName, opToken };
+  localStorage.setItem('myPhotos', JSON.stringify(m));
+}
+function myPhoto(id) { return myPhotos()[id] || null; }
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+function commentHtml(c) {
+  const badge = c.is_op
+    ? '<span class="op-badge">★ OP</span><span class="c-name">' + escapeHtml(c.author_name || '') + '</span>'
+    : '';
+  return '<div class="c-item">' + badge + escapeHtml(c.body) +
+         '<time>' + new Date(c.created_at).toLocaleString() + '</time></div>';
+}
+
 async function refresh() {
   try {
     const res = await fetch('/api/current');
     const data = await res.json();
     const newPhotoId = data.photo && data.photo.id;
     const oldPhotoId = state.photo && state.photo.id;
-
     state = data;
 
     if (newPhotoId !== oldPhotoId) {
@@ -200,9 +230,12 @@ async function refresh() {
         img.src = data.photo.url;
         img.alt = data.photo.caption || 'photo';
         $('imgWrap').appendChild(img);
-        $('caption').style.display = data.photo.caption ? 'block' : 'none';
-        $('caption').textContent = data.photo.caption || '';
+        const cap = $('caption');
+        cap.style.display = data.photo.caption || data.photo.opName ? 'block' : 'none';
+        cap.innerHTML = (data.photo.opName ? '<span class="op-tag">by ' + escapeHtml(data.photo.opName) + '</span>' : '')
+                        + escapeHtml(data.photo.caption || '');
         loadComments(newPhotoId);
+        $('cmsg').textContent = '';
       } else {
         $('imgWrap').innerHTML = '<div class="empty">Waiting for the next photo…</div>';
         $('caption').style.display = 'none';
@@ -221,7 +254,7 @@ async function refresh() {
       setTimeout(() => $('timer').classList.remove('pulse'), 600);
     }
     lastSeenSeconds = data.remainingSeconds;
-  } catch (e) { /* keep old state on network blip */ }
+  } catch (e) {}
 }
 
 async function loadComments(photoId) {
@@ -229,27 +262,19 @@ async function loadComments(photoId) {
     const res = await fetch('/api/photos/' + photoId + '/comments');
     const list = await res.json();
     $('clist').innerHTML = list.length
-      ? list.map(c =>
-          '<div class="c-item">' + escapeHtml(c.body) +
-          '<time>' + new Date(c.created_at).toLocaleString() + '</time></div>').join('')
+      ? list.map(commentHtml).join('')
       : '<div class="empty" style="padding:10px">No comments yet.</div>';
   } catch (e) {}
 }
 
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-}
-
-// countdown (decrements locally, resyncs with server every poll)
+// countdown
 setInterval(() => {
   if (!state.photo) { $('timer').textContent = '--:--'; $('bar').style.width = '0%'; return; }
   if (state.remainingSeconds > 0) state.remainingSeconds--;
   $('timer').textContent = fmt(state.remainingSeconds);
   $('timer').className = 'timer' + (state.remainingSeconds === 0 ? ' dead' : state.remainingSeconds < 60 ? ' warn' : '');
   $('bar').style.width = Math.min(100, (state.remainingSeconds / 600) * 100) + '%';
-  if (state.remainingSeconds === 0) {
-    $('timer').textContent = 'NEXT…';
-  }
+  if (state.remainingSeconds === 0) $('timer').textContent = 'NEXT…';
 }, 1000);
 
 setInterval(refresh, 4000);
@@ -262,10 +287,14 @@ $('likeBtn').onclick = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ photoId: state.photo.id }),
     });
+    const data = await res.json().catch(() => ({}));
     if (res.ok || res.status === 409) {
       liked[state.photo.id] = true;
       localStorage.setItem('liked', JSON.stringify(liked));
       refresh();
+    } else if (data.error) {
+      $('cmsg').textContent = data.error;
+      $('cmsg').className = 'c-msg err';
     }
   } catch (e) {}
 };
@@ -274,13 +303,23 @@ $('cform').onsubmit = async (e) => {
   e.preventDefault();
   const body = $('cinput').value.trim();
   if (!body || !state.photo) return;
+  const mine = myPhoto(state.photo.id);
   try {
     const res = await fetch('/api/comments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ photoId: state.photo.id, body }),
+      body: JSON.stringify({ photoId: state.photo.id, body, opToken: mine ? mine.opToken : undefined }),
     });
-    if (res.ok) { $('cinput').value = ''; refresh(); loadComments(state.photo.id); }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      $('cinput').value = '';
+      $('cmsg').textContent = '';
+      refresh();
+      loadComments(state.photo.id);
+    } else {
+      $('cmsg').textContent = data.error || 'Comment failed.';
+      $('cmsg').className = 'c-msg err';
+    }
   } catch (e) {}
 };
 
@@ -317,15 +356,19 @@ $('uploadBtn').onclick = async () => {
   const fd = new FormData();
   fd.append('photo', pickedFile);
   fd.append('caption', $('captionInput').value);
+  fd.append('opName', $('nameInput').value);
   try {
     const res = await fetch('/api/upload', { method: 'POST', body: fd });
     const data = await res.json();
     if (res.ok) {
-      umsg('Uploaded! It will appear on the wall soon.', true);
+      // Save the secret token — this browser can now prove it's the OP of this photo
+      saveMyPhoto(data.id, data.opName, data.opToken);
+      umsg(`Uploaded as "${data.opName}"! It will appear on the wall soon.`, true);
       pickedFile = null; fileInput.value = '';
       $('preview').style.display = 'none';
       $('dropText').textContent = 'Click or drop a photo here (max 8 MB)';
       $('captionInput').value = '';
+      $('nameInput').value = '';
     } else {
       umsg(data.error || 'Upload failed.', false);
     }
