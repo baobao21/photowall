@@ -141,13 +141,13 @@ async function getCurrentDisplay() {
   if (!photo) return null;
 
   const engagement = await getEngagement(photo.id);
-  const { data: url } = supabase.storage.from(BUCKET).getPublicUrl(photo.storage_path);
+  const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(photo.storage_path);
 
   return {
     photo: {
       id: photo.id,
       caption: photo.caption,
-      url: url.publicUrl,
+      url: urlData.publicUrl,
       opName: photo.op_name,
       uploadedAt: photo.created_at,
     },
