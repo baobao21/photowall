@@ -141,6 +141,20 @@
   footer { padding: 20px 14px; text-align: center; color: var(--muted); font-size: 11px; border-top: 1px solid var(--border); line-height: 1.5; }
   .pulse { animation: pulse .5s ease; }
   @keyframes pulse { 50% { transform: scale(1.08); } }
+  .auth-btn { background: var(--panel2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 12px; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .auth-btn.alt { background: var(--accent); color: #000; border-color: var(--accent); }
+  .who { font-size: 13px; font-weight: 700; color: var(--accent); margin-right: 6px; }
+  #authBox { display: flex; align-items: center; gap: 6px; }
+  .gate { text-align: center; color: var(--muted); font-size: 13px; padding: 18px 10px; border: 2px dashed var(--border); border-radius: 12px; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; z-index: 50; padding: 14px; }
+  .modal-card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 22px; width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 10px; }
+  .modal-card input { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 11px 12px; color: var(--text); font-size: 14px; outline: none; }
+  .modal-card input:focus { border-color: var(--accent); }
+  .modal-card .primary { background: var(--accent2); border: none; color: #fff; border-radius: 10px; padding: 12px; font-weight: 700; cursor: pointer; }
+  .modal-card small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+  .p-item { display: flex; gap: 10px; align-items: center; background: var(--panel2); border-radius: 10px; padding: 8px; margin-top: 8px; font-size: 13px; }
+  .p-item img { width: 54px; height: 54px; object-fit: cover; border-radius: 6px; }
+  .st-live { color: #6ee7a0; } .st-pending { color: var(--accent); } .st-rejected { color: var(--accent2); } .st-archived { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -148,7 +162,22 @@
 <header>
   <div class="logo">THE<span>WALL</span></div>
   <div class="hint">1 like = +5 min · 1 comment = +10 min (replies don't count)</div>
+  <div id="authBox"></div>
 </header>
+
+<div class="modal" id="modal">
+  <div class="modal-card">
+    <h3 id="mTitle">Sign in</h3>
+    <input id="mEmail" type="email" placeholder="Email" autocomplete="email">
+    <input id="mUser" maxlength="20" placeholder="Username (permanent)" autocomplete="username" style="display:none">
+    <input id="mPass" type="password" placeholder="Password (min 8 characters)">
+    <small id="mHelp"></small>
+    <button class="primary" id="mSubmit">Sign in</button>
+    <div class="msg" id="mMsg"></div>
+    <button type="button" class="reply-btn" id="mSwitch"></button>
+    <button type="button" class="reply-btn" id="mClose" style="color:var(--muted)">Close</button>
+  </div>
+</div>
 
 <main>
   <div class="stage">
@@ -183,25 +212,32 @@
     </div>
   </div>
 
+  <div class="card" id="profileCard" style="display:none; margin-top:16px">
+    <h2 style="font-size:15px">👤 <span id="pName"></span> — your uploads</h2>
+    <div id="pPhotos"></div>
+  </div>
+
   <div class="card upload">
     <h2>Put your photo in the queue</h2>
     <p>Photos rotate on screen. Likes &amp; comments extend display time!</p>
+    <div class="gate" id="uploadGate"></div>
+    <div id="uploadForm" style="display:none">
     <label class="drop" id="drop">
       <input type="file" id="file" accept="image/jpeg,image/png,image/webp,image/gif">
       <span id="dropText">Click or drop a photo here (max 8 MB)</span>
       <img class="preview" id="preview" alt="">
     </label>
     <div class="u-row">
-      <input id="nameInput" maxlength="20" placeholder="Pick a name (permanent!) — blank = random">
       <input id="captionInput" maxlength="280" placeholder="Optional caption (280 chars)">
       <button id="uploadBtn">Upload</button>
     </div>
     <div class="msg" id="umsg"></div>
+    </div>
   </div>
 </main>
 
 <footer>
-  <br>
+  IPs are stored securely as salted hashes for spam prevention.<br>
   Max 5 comments per photo · Cooldowns apply · VPN/proxy connections blocked.
 </footer>
 
@@ -276,7 +312,7 @@ async function submitReply(parentId) {
   try {
     const res = await fetch('/api/comments', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ photoId: state.photo.id, body, parentId, opToken: mine ? mine.opToken : undefined }),
     });
     const data = await res.json().catch(() => ({}));
@@ -385,7 +421,7 @@ $('cform').onsubmit = async (e) => {
   try {
     const res = await fetch('/api/comments', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ photoId: state.photo.id, body, opToken: mine ? mine.opToken : undefined }),
     });
     const data = await res.json().catch(() => ({}));
@@ -411,19 +447,6 @@ drop.addEventListener('drop', (e) => {
 });
 fileInput.addEventListener('change', () => fileInput.files[0] && pickFile(fileInput.files[0]));
 
-async function loadMyName() {
-  try {
-    const res = await fetch('/api/my-name');
-    const data = await res.json();
-    const el = $('nameInput');
-    if (data.name) {
-      el.value = data.name;
-      el.disabled = true;
-      el.title = 'Your name is permanently linked to your connection.';
-    }
-  } catch (e) {}
-}
-
 function pickFile(f) {
   if (f.size > 8 * 1024 * 1024) return umsg('File too big (max 8 MB).', false);
   pickedFile = f;
@@ -445,9 +468,9 @@ $('uploadBtn').onclick = async () => {
   const fd = new FormData();
   fd.append('photo', pickedFile);
   fd.append('caption', $('captionInput').value);
-  fd.append('opName', $('nameInput').value);
   try {
-    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const res = await fetch('/api/upload', { method: 'POST', headers: authHeaders(), body: fd });
+    if (res.status === 401) { logout(); openModal('signin'); return umsg('Please sign in again.', false); }
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
       saveMyPhoto(data.id, data.opName, data.opToken);
@@ -455,15 +478,105 @@ $('uploadBtn').onclick = async () => {
       pickedFile = null; fileInput.value = '';
       $('preview').style.display = 'none';$('dropText').textContent = 'Click or drop a photo here (max 8 MB)';
       $('captionInput').value = '';
-      loadMyName();
+      loadProfile();
     } else {
       umsg(data.error || 'Upload failed.', false);
     }
   } catch (e) { umsg('Network error. Try again.', false); }
 };
 
+// ---------- accounts ----------
+let auth = null;
+try { auth = JSON.parse(localStorage.getItem('auth') || 'null'); } catch (e) {}
+let me = null;
+let modalMode = 'signin';
+function authHeaders() { return auth ? { Authorization: 'Bearer ' + auth.token } : {}; }
+function saveAuth(a) {
+  auth = a;
+  if (a) localStorage.setItem('auth', JSON.stringify(a)); else localStorage.removeItem('auth');
+}
+
+function renderAuth() {
+  const box = $('authBox');
+  if (auth) {
+    box.innerHTML = '<span class="who">👤 ' + escapeHtml(auth.username) + '</span><button class="auth-btn" id="logoutBtn">Log out</button>';
+    $('logoutBtn').onclick = logout;
+  } else {
+    box.innerHTML = '<button class="auth-btn" id="signinBtn">Sign in</button><button class="auth-btn alt" id="signupBtn">Sign up</button>';
+    $('signinBtn').onclick = () => openModal('signin');
+    $('signupBtn').onclick = () => openModal('signup');
+  }
+  $('uploadGate').innerHTML = 'Sign in or create a free account to upload photos.<br><small>Liking and commenting don\'t need an account.</small>';
+  $('uploadGate').style.display = auth ? 'none' : 'block';
+  $('uploadForm').style.display = auth ? 'block' : 'none';
+  $('profileCard').style.display = auth ? 'block' : 'none';
+  $('pName').textContent = auth ? auth.username : '';
+}
+
+function logout() { saveAuth(null); me = null; renderAuth(); }
+
+async function loadProfile() {
+  if (!auth) return;
+  try {
+    const res = await fetch('/api/me', { headers: authHeaders() });
+    if (res.status === 401) return logout();
+    me = await res.json();
+    renderProfile();
+  } catch (e) {}
+}
+
+function renderProfile() {
+  if (!me) return;
+  const warn = me.ipMatches ? '' : '<div class="msg err">⚠ Your account is locked to a different connection, so uploads are blocked here. Ask the admin to reset your IP lock.</div>';
+  const label = { live: 'Live ✓', pending: 'Waiting for approval', rejected: 'Rejected', archived: 'Archived' };
+  const list = (me.photos || []).map((p) =>
+    '<div class="p-item"><img src="' + escapeHtml(p.url) + '" alt=""><div><b class="st-' + escapeHtml(p.status) + '">' +
+    escapeHtml(label[p.status] || p.status) + '</b><br><small>' + escapeHtml(p.caption || '') + '</small></div></div>'
+  ).join('') || '<div class="empty" style="padding:10px">No uploads yet.</div>';
+  $('pPhotos').innerHTML = warn + list;
+}
+
+function openModal(mode) {
+  modalMode = mode;
+  const up = mode === 'signup';
+  $('mTitle').textContent = up ? 'Create account' : 'Sign in';
+  $('mUser').style.display = up ? 'block' : 'none';
+  $('mSubmit').textContent = up ? 'Sign up' : 'Sign in';
+  $('mSwitch').textContent = up ? 'Have an account? Sign in' : 'No account? Sign up';
+  $('mHelp').textContent = up ? 'Your username is permanent and shown on your photos. Your account is locked to your internet connection (one account per IP).' : '';
+  $('mPass').autocomplete = up ? 'new-password' : 'current-password';
+  $('mMsg').textContent = '';
+  $('modal').style.display = 'flex';
+}
+$('mSwitch').onclick = () => openModal(modalMode === 'signup' ? 'signin' : 'signup');
+$('mClose').onclick = () => { $('modal').style.display = 'none'; };
+$('modal').addEventListener('click', (e) => { if (e.target === $('modal')) $('modal').style.display = 'none'; });
+
+$('mSubmit').onclick = async () => {
+  const body = { email: $('mEmail').value.trim(), password: $('mPass').value };
+  if (modalMode === 'signup') body.username = $('mUser').value.trim();
+  $('mMsg').className = 'msg ok'; $('mMsg').textContent = 'Please wait…';
+  try {
+    const res = await fetch('/api/auth/' + (modalMode === 'signup' ? 'signup' : 'login'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      saveAuth({ token: data.token, username: data.profile.username });
+      $('modal').style.display = 'none';
+      $('mPass').value = '';
+      renderAuth();
+      loadProfile();
+    } else {
+      $('mMsg').className = 'msg err';
+      $('mMsg').textContent = data.error || 'Something went wrong.';
+    }
+  } catch (e) { $('mMsg').className = 'msg err'; $('mMsg').textContent = 'Network error. Try again.'; }
+};
+
 refresh();
-loadMyName();
+renderAuth();
+loadProfile();
 </script>
 </body>
 </html>
