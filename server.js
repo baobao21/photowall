@@ -266,7 +266,18 @@ app.post('/api/upload', uploadLimiter, uploadSingle, wrap(async (req, res) => {
   }
   // The name is bound to this IP permanently; whatever was typed is ignored if one already exists.
   const ipHash = hashIp(clientIp(req));
-  const claim = await claimPosterName(ipHash, requestedName);
+  let claim;
+  try {
+    claim = await claimPosterName(ipHash, requestedName);
+  } catch (err) {
+    console.error('[upload] poster name:', err);
+    const missing = err.code === '42P01' || err.code === 'PGRST205' || /posters/.test(err.message || '');
+    return res.status(500).json({
+      error: missing
+        ? 'Setup problem: the "posters" table is missing. Run schema.sql in the Supabase SQL editor.'
+        : `Could not assign a poster name (${err.message || 'unknown error'}).`,
+    });
+  }
   if (claim.taken) {
     return res.status(409).json({ error: 'That name is already taken. Pick another, or leave it blank for a random one.' });
   }
@@ -484,6 +495,28 @@ app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   res.status(err.status || 500).json({ error: err.type === 'entity.too.large' ? 'Request too large.' : 'Server error.' });
 });
+
+// ---------- startup self-check: tells you exactly what's missing in Supabase ----------
+async function checkSchema() {
+  const checks = {
+    photos: 'id, storage_path, caption, op_name, op_token, uploader_ip_hash, status, created_at',
+    comments: 'id, photo_id, body, author_name, is_op, parent_id, commenter_ip_hash, created_at',
+    likes: 'id, photo_id, liker_ip_hash, created_at',
+    posters: 'ip_hash, name',
+    display_state: 'id, photo_id, started_at',
+    display_log: 'id, photo_id, shown_at',
+  };
+  for (const [table, cols] of Object.entries(checks)) {
+    const { error } = await supabase.from(table).select(cols).limit(1);
+    if (error) console.error(`[schema] PROBLEM with "${table}": ${error.message} -> re-run schema.sql in Supabase`);
+  }
+  const { error: bErr } = await supabase.storage.from(BUCKET).list('', { limit: 1 });
+  if (bErr) console.error(`[schema] PROBLEM with storage bucket "${BUCKET}": ${bErr.message} -> create a PUBLIC bucket with that name`);
+  const { error: rErr } = await supabase.rpc('pick_next_photo', { excl_hours: 0 });
+  if (rErr) console.error(`[schema] PROBLEM with function pick_next_photo: ${rErr.message}`);
+  console.log('[schema] check finished (no PROBLEM lines above = all good)');
+}
+checkSchema().catch((e) => console.error('[schema] check failed:', e.message));
 
 // ---------- go ----------
 tick();
