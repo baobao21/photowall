@@ -147,7 +147,7 @@
 
 <header>
   <div class="logo">THE<span>WALL</span></div>
-  <div class="hint">1 like = +5 min · 1 comment = +10 min</div>
+  <div class="hint">1 like = +5 min · 1 comment = +10 min (replies don't count)</div>
 </header>
 
 <main>
@@ -192,7 +192,7 @@
       <img class="preview" id="preview" alt="">
     </label>
     <div class="u-row">
-      <input id="nameInput" maxlength="20" placeholder="Your name (blank = random name)">
+      <input id="nameInput" maxlength="20" placeholder="Pick a name (permanent!) — blank = random">
       <input id="captionInput" maxlength="280" placeholder="Optional caption (280 chars)">
       <button id="uploadBtn">Upload</button>
     </div>
@@ -411,6 +411,19 @@ drop.addEventListener('drop', (e) => {
 });
 fileInput.addEventListener('change', () => fileInput.files[0] && pickFile(fileInput.files[0]));
 
+async function loadMyName() {
+  try {
+    const res = await fetch('/api/my-name');
+    const data = await res.json();
+    const el = $('nameInput');
+    if (data.name) {
+      el.value = data.name;
+      el.disabled = true;
+      el.title = 'Your name is permanently linked to your connection.';
+    }
+  } catch (e) {}
+}
+
 function pickFile(f) {
   if (f.size > 8 * 1024 * 1024) return umsg('File too big (max 8 MB).', false);
   pickedFile = f;
@@ -441,7 +454,8 @@ $('uploadBtn').onclick = async () => {
       umsg(data.status === 'pending' ? `Uploaded as "${data.opName}" — waiting for admin approval.` : `Uploaded as "${data.opName}"! It's in the queue.`, true);
       pickedFile = null; fileInput.value = '';
       $('preview').style.display = 'none';$('dropText').textContent = 'Click or drop a photo here (max 8 MB)';
-      $('captionInput').value = '';$('nameInput').value = '';
+      $('captionInput').value = '';
+      loadMyName();
     } else {
       umsg(data.error || 'Upload failed.', false);
     }
@@ -449,6 +463,7 @@ $('uploadBtn').onclick = async () => {
 };
 
 refresh();
+loadMyName();
 </script>
 </body>
 </html>
