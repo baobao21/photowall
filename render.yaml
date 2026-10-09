@@ -29,5 +29,7 @@ services:
         value: "true"
       - key: SUPABASE_ANON_KEY  # optional but recommended: used only to verify passwords at login
         sync: false
+      - key: SITE_URL           # your public URL, used in password-reset emails
+        value: "https://photowall-faoe.onrender.com"
       - key: SESSION_SECRET     # optional: random string that signs login sessions
         sync: false
