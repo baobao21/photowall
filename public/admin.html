@@ -71,7 +71,7 @@ async function loadPhotos() {
     // Generate public URLs for Supabase storage paths
     // Note: Supabase public URL structure is /storage/v1/object/public/BUCKET_NAME/path
     list.innerHTML = photos.map(p => {
-      const imgUrl = `https://https://xktxwljgckpnvkcsjirl.supabase.co/storage/v1/object/public/photos/${p.storage_path}`;
+      const imgUrl = `https://xktxwljgckpnvkcsjirl.supabase.co/storage/v1/object/public/photos/${p.storage_path}`;
       return `
         <div class="photo-card">
           <img src="${imgUrl}" alt="Photo" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\'><rect width=\'100\' height=\'100\' fill=\'%23333\'/><text x=\'50%\' y=\'50%\' fill=\'%23aaa\' dominant-baseline=\'middle\' text-anchor=\'middle\'>No Image</text></svg>'">
