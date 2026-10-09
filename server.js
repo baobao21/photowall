@@ -7,72 +7,74 @@ const rateLimit = require('express-rate-limit');
 const { createClient } = require('@supabase/supabase-js');
 
 // ---------- config ----------
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.error('[fatal] SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set.');
+  process.exit(1);
+}
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const BUCKET = process.env.SUPABASE_BUCKET || 'photos';
+const REQUIRE_APPROVAL = process.env.REQUIRE_APPROVAL === 'true';
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024, files: 1 },
 });
 
-const BASE_SECONDS = 15;      // base display duration in seconds
-const LIKE_MINUTES = 5;       // +5 min per like
-const COMMENT_MINUTES = 10;   // +10 min per comment
+const BASE_SECONDS = 15;
+const LIKE_MINUTES = 5;
+const COMMENT_MINUTES = 10;
 const REPEAT_EXCLUSION_HOURS = 0;
 
-// ---------- anti-spam & moderation rules ----------
-const COMMENTS_PER_PHOTO_PER_IP = 5;      // max comments one IP can leave on a single photo
-const COMMENTS_PER_DAY_PER_IP = 40;       // global daily comment cap per IP
-const COMMENT_COOLDOWN_SECONDS = 15;      // min seconds between comments from one IP
-const LIKES_PER_DAY_PER_IP = 100;         // global daily like cap per IP
-const VPN_CACHE_HOURS = 24;               // how long we remember an IP's VPN check
+const COMMENTS_PER_PHOTO_PER_IP = 5;
+const COMMENTS_PER_DAY_PER_IP = 40;
+const COMMENT_COOLDOWN_SECONDS = 15;
+const LIKES_PER_DAY_PER_IP = 100;
+const VPN_CACHE_HOURS = 24;
 
-const ALLOWED_MIME = {
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
-};
-
-// Fun anonymous name generator for uploaders who don't pick a name
 const ADJ = ['Swift', 'Clever', 'Sleepy', 'Bold', 'Cosmic', 'Mellow', 'Hyper', 'Quiet', 'Lucky', 'Grumpy', 'Neon', 'Ancient', 'Sneaky', 'Turbo', 'Frosty', 'Golden'];
-const NOUN = ['Fox', 'Otter', 'Raccoon', 'Panda', 'Falcon', 'Wolf', 'Lynx', 'Badger', 'Crane', 'Moose', 'Viper', 'Badger', 'Heron', 'Bison', 'Eagle', 'Sphinx'];
+const NOUN = ['Fox', 'Otter', 'Raccoon', 'Panda', 'Falcon', 'Wolf', 'Lynx', 'Badger', 'Crane', 'Moose', 'Viper', 'Cobra', 'Heron', 'Bison', 'Eagle', 'Sphinx'];
 const generateName = () =>
   `${ADJ[crypto.randomInt(ADJ.length)]} ${NOUN[crypto.randomInt(NOUN.length)]} ${crypto.randomInt(1000, 9999)}`;
 
-// IPs are stored only as salted hashes — we can dedupe, but a leak can't identify anyone.
 const IP_SALT = process.env.IP_SALT || crypto.randomBytes(32).toString('hex');
 if (!process.env.IP_SALT) {
-  console.warn('[warn] IP_SALT is not set — generated a random one for this session only. Set it in .env or likes will reset on restart.');
+  console.warn('[warn] IP_SALT is not set — using a random one for this run. Likes will reset on restart.');
 }
-
 const clientIp = (req) =>
   (req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || 'unknown').trim();
-const hashIp = (ip) =>
-  crypto.createHash('sha256').update(`${ip}:${IP_SALT}`).digest('hex');
+const hashIp = (ip) => crypto.createHash('sha256').update(`${ip}:${IP_SALT}`).digest('hex');
 
-// --- Malicious link & spam blocker function ---
-function containsMaliciousContent(text) {
-  if (!text) return false;
-  const urlRegex = /(https?:\/\/|www\.|[a-zA-Z0-9-]+\.(com|net|org|ru|xyz|top|cn|info|tk))/i;
-  return urlRegex.test(text);
+// Detect real image type from file bytes (don't trust the client's mimetype)
+function sniffImage(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { mime: 'image/png', ext: 'png' };
+  const h6 = buf.subarray(0, 6).toString('latin1');
+  if (h6 === 'GIF87a' || h6 === 'GIF89a') return { mime: 'image/gif', ext: 'gif' };
+  if (buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP') return { mime: 'image/webp', ext: 'webp' };
+  return null;
 }
 
-// ---------- VPN / proxy detection ----------
-const vpnCache = new Map(); // ipHash -> { bad: boolean, at: number }
+function containsMaliciousContent(text) {
+  if (!text) return false;
+  return /(https?:\/\/|www\.|[a-zA-Z0-9-]+\.(com|net|org|ru|xyz|top|cn|info|tk)\b)/i.test(text);
+}
 
+// Express 4 doesn't catch async errors — without this, one rejected promise can crash the process.
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch((err) => {
+  console.error(`[${req.method} ${req.path}]`, err);
+  if (!res.headersSent) res.status(500).json({ error: 'Server error.' });
+});
+
+// ---------- VPN / proxy detection ----------
+const vpnCache = new Map();
 async function isBadIp(ip) {
   if (!process.env.VPNCHECK_API_KEY) return false;
   const key = hashIp(ip);
   const cached = vpnCache.get(key);
   if (cached && Date.now() - cached.at < VPN_CACHE_HOURS * 3600 * 1000) return cached.bad;
-
   let bad = false;
   try {
     const res = await fetch(
@@ -81,17 +83,9 @@ async function isBadIp(ip) {
     );
     const data = await res.json();
     const info = data?.[ip];
-    bad = !!info && (
-      info.proxy === 'yes' ||
-      info.type === 'VPN' ||
-      info.type === 'TOR' ||
-      (parseInt(info.risk, 10) || 0) >= 80
-    );
-  } catch {
-    bad = false;
-  }
+    bad = !!info && (info.proxy === 'yes' || info.type === 'VPN' || info.type === 'TOR' || (parseInt(info.risk, 10) || 0) >= 80);
+  } catch { bad = false; }
   vpnCache.set(key, { bad, at: Date.now() });
-  if (bad) console.log(`[vpn-check] blocked ${ip} (vpn/proxy/tor)`);
   return bad;
 }
 
@@ -99,311 +93,269 @@ async function isBadIp(ip) {
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '20kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
-const uploadLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 10,
-  standardHeaders: true, legacyHeaders: false,
-  message: { error: 'Upload limit reached. Try again in a few minutes.' },
+const limiterOpts = (windowMs, max, message) => ({
+  windowMs, max, standardHeaders: true, legacyHeaders: false,
+  keyGenerator: (req) => clientIp(req),
+  validate: { keyGeneratorIpFallback: false, ip: false },
+  ...(message ? { message: { error: message } } : {}),
 });
-const commentLimiter = rateLimit({
-  windowMs: 60 * 1000, max: 20,
-  standardHeaders: true, legacyHeaders: false,
-  message: { error: 'Slow down with the comments a little.' },
-});
-const likeLimiter = rateLimit({
-  windowMs: 60 * 1000, max: 60,
-  standardHeaders: true, legacyHeaders: false,
-});
+const uploadLimiter = rateLimit(limiterOpts(15 * 60 * 1000, 10, 'Upload limit reached. Try again in a few minutes.'));
+const commentLimiter = rateLimit(limiterOpts(60 * 1000, 20, 'Slow down with the comments a little.'));
+const likeLimiter = rateLimit(limiterOpts(60 * 1000, 60, 'Too many likes, slow down.'));
+const adminLoginLimiter = rateLimit(limiterOpts(15 * 60 * 1000, 10, 'Too many login attempts.'));
 
 // ---------- display logic ----------
 async function getEngagement(photoId, startedAt, uploaderIpHash) {
-  // 1. Get total all-time counts to display on the frontend UI
-  const [totalLikes, totalComments] = await Promise.all([
+  const [totalLikes, totalComments, sessionLikesRes, sessionCommentsRes] = await Promise.all([
     supabase.from('likes').select('*', { count: 'exact', head: true }).eq('photo_id', photoId),
     supabase.from('comments').select('*', { count: 'exact', head: true }).eq('photo_id', photoId),
-  ]);
-
-  // 2. Get session-specific engagement (current rotation + non-OP) for time calculation
-  const [sessionLikesRes, sessionCommentsRes] = await Promise.all([
     supabase.from('likes').select('liker_ip_hash').eq('photo_id', photoId).gte('created_at', startedAt),
     supabase.from('comments').select('is_op, commenter_ip_hash').eq('photo_id', photoId).gte('created_at', startedAt),
   ]);
-
-  const validSessionLikes = (sessionLikesRes.data || []).filter(l => l.liker_ip_hash !== uploaderIpHash);
-  const validSessionComments = (sessionCommentsRes.data || []).filter(c => !c.is_op && c.commenter_ip_hash !== uploaderIpHash);
-
+  const sLikes = (sessionLikesRes.data || []).filter((l) => l.liker_ip_hash !== uploaderIpHash);
+  const sComments = (sessionCommentsRes.data || []).filter((c) => !c.is_op && c.commenter_ip_hash !== uploaderIpHash);
   return {
-    display: {
-      likes: totalLikes.count || 0,
-      comments: totalComments.count || 0,
-    },
-    session: {
-      likes: validSessionLikes.length,
-      comments: validSessionComments.length,
-    }
+    display: { likes: totalLikes.count || 0, comments: totalComments.count || 0 },
+    session: { likes: sLikes.length, comments: sComments.length },
   };
 }
 
-function remainingSeconds(startedAt, sessionEngagement) {
-  const baseEnd = new Date(startedAt).getTime() + BASE_SECONDS * 1000;
-  const bonus = (sessionEngagement.likes * LIKE_MINUTES + sessionEngagement.comments * COMMENT_MINUTES) * 60 * 1000;
-  return Math.max(0, Math.round((baseEnd + bonus - Date.now()) / 1000));
+function timing(startedAt, s) {
+  const bonus = (s.likes * LIKE_MINUTES + s.comments * COMMENT_MINUTES) * 60;
+  const total = BASE_SECONDS + bonus;
+  const end = new Date(startedAt).getTime() + total * 1000;
+  return { total, remaining: Math.max(0, Math.round((end - Date.now()) / 1000)) };
 }
 
 async function getCurrentDisplay() {
-  const { data: state } = await supabase
-    .from('display_state').select('photo_id, started_at').eq('id', 1).single();
-  if (!state?.photo_id) return null;
+  const { data: state } = await supabase.from('display_state').select('photo_id, started_at').eq('id', 1).maybeSingle();
+  if (!state?.photo_id || !state.started_at) return null;
 
-  const { data: photo } = await supabase
-    .from('photos').select('id, caption, storage_path, op_name, created_at, uploader_ip_hash')
-    .eq('id', state.photo_id).single();
-  if (!photo) return null;
+  const { data: photo } = await supabase.from('photos')
+    .select('id, caption, storage_path, op_name, created_at, uploader_ip_hash, status')
+    .eq('id', state.photo_id).maybeSingle();
+  // photo deleted, rejected or archived by admin -> treat as nothing on screen so tick() picks a new one
+  if (!photo || photo.status !== 'live') return null;
 
-  const engagementData = await getEngagement(photo.id, state.started_at, photo.uploader_ip_hash);
+  const eng = await getEngagement(photo.id, state.started_at, photo.uploader_ip_hash);
   const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(photo.storage_path);
+  const t = timing(state.started_at, eng.session);
 
   return {
-    photo: {
-      id: photo.id,
-      caption: photo.caption,
-      url: urlData.publicUrl,
-      opName: photo.op_name,
-      uploadedAt: photo.created_at,
-    },
-    engagement: engagementData.display,
-    remainingSeconds: remainingSeconds(state.started_at, engagementData.session),
+    photo: { id: photo.id, caption: photo.caption, url: urlData.publicUrl, opName: photo.op_name, uploadedAt: photo.created_at },
+    engagement: eng.display,
+    remainingSeconds: t.remaining,
+    totalSeconds: t.total,
     startedAt: state.started_at,
   };
 }
 
 async function pickNextPhoto() {
   const get = async (hours) => {
-    const { data } = await supabase.rpc('pick_next_photo', { excl_hours: hours });
+    const { data, error } = await supabase.rpc('pick_next_photo', { excl_hours: hours });
+    if (error) console.error('[pick_next_photo]', error.message);
     return Array.isArray(data) ? data[0] : data;
   };
   return (await get(REPEAT_EXCLUSION_HOURS)) || (await get(0));
 }
 
-async function tick() {
+let ticking = false;
+async function tick(force = false) {
+  if (ticking) return;
+  ticking = true;
   try {
     const current = await getCurrentDisplay();
-    if (current && current.remainingSeconds > 0) return;
+    if (!force && current && current.remainingSeconds > 0) return;
 
-    const next = await pickNextPhoto();
+    let next = await pickNextPhoto();
+    // when skipping, try not to re-pick the same photo
+    for (let i = 0; force && current && next && next.id === current.photo.id && i < 4; i++) {
+      next = await pickNextPhoto();
+    }
     if (!next || !next.id) {
-      console.log('[tick] queue is empty — nothing to show');
+      if (current === null) {
+        await supabase.from('display_state').update({ photo_id: null, started_at: null }).eq('id', 1);
+      }
       return;
     }
-
     const now = new Date().toISOString();
     const { error } = await supabase.from('display_state')
-      .update({ photo_id: next.id, started_at: now, updated_at: now })
-      .eq('id', 1);
+      .update({ photo_id: next.id, started_at: now, updated_at: now }).eq('id', 1);
     if (error) throw error;
-
     await supabase.from('display_log').insert({ photo_id: next.id });
     console.log(`[tick] now showing photo ${next.id}`);
   } catch (err) {
     console.error('[tick] error:', err.message);
+  } finally {
+    ticking = false;
   }
 }
 
 // ---------- routes ----------
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
-app.get('/api/current', async (req, res) => {
-  try {
-    const current = await getCurrentDisplay();
-    res.json(current || {
-      photo: null,
-      engagement: { likes: 0, comments: 0 },
-      remainingSeconds: 0,
-    });
-  } catch (err) {
-    console.error('[current]', err);
-    res.status(500).json({ error: 'Could not load the current photo.' });
+app.get('/api/current', wrap(async (req, res) => {
+  const current = await getCurrentDisplay();
+  res.json(current || { photo: null, engagement: { likes: 0, comments: 0 }, remainingSeconds: 0, totalSeconds: 0 });
+}));
+
+const uploadSingle = (req, res, next) =>
+  upload.single('photo')(req, res, (err) => {
+    if (!err) return next();
+    const msg = err.code === 'LIMIT_FILE_SIZE' ? 'File too big (max 8 MB).' : 'Upload error. Try a different file.';
+    res.status(400).json({ error: msg });
+  });
+
+app.post('/api/upload', uploadLimiter, uploadSingle, wrap(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No photo attached.' });
+
+  const kind = sniffImage(req.file.buffer);
+  if (!kind) return res.status(400).json({ error: 'Only JPG, PNG, WebP or GIF images are allowed.' });
+
+  const caption = (req.body.caption || '').toString().slice(0, 280);
+  if (containsMaliciousContent(caption)) {
+    return res.status(400).json({ error: 'Captions cannot contain links or promotional URLs.' });
   }
-});
-
-app.post('/api/upload', uploadLimiter, upload.single('photo'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No photo attached.' });
-
-    const ext = ALLOWED_MIME[req.file.mimetype];
-    if (!ext) {
-      return res.status(400).json({ error: 'Only JPG, PNG, WebP or GIF images are allowed.' });
-    }
-
-    const caption = (req.body.caption || '').toString().slice(0, 280);
-    if (containsMaliciousContent(caption)) {
-      return res.status(400).json({ error: 'Captions cannot contain links or promotional URLs.' });
-    }
-
-    const requestedName = (req.body.opName || '').toString().trim().slice(0, 20);
-    const opName = requestedName || generateName();
-    const opToken = crypto.randomUUID();
-
-    const storagePath = `uploads/${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
-    const { error: upErr } = await supabase.storage
-      .from(BUCKET)
-      .upload(storagePath, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
-    if (upErr) throw upErr;
-
-    const { data: photo, error: dbErr } = await supabase.from('photos')
-      .insert({
-        storage_path: storagePath,
-        caption,
-        op_name: opName,
-        op_token: opToken,
-        uploader_ip_hash: hashIp(clientIp(req)),
-        status: 'pending',
-      })
-      .select('id')
-      .single();
-    if (dbErr) throw dbErr;
-
-    res.json({ ok: true, id: photo.id, opName, opToken });
-  } catch (err) {
-    console.error('[upload]', err);
-    res.status(500).json({ error: 'Upload failed. Please try again.' });
+  const requestedName = (req.body.opName || '').toString().trim().slice(0, 20);
+  if (containsMaliciousContent(requestedName)) {
+    return res.status(400).json({ error: 'Names cannot contain links.' });
   }
-});
+  const opName = requestedName || generateName();
+  const opToken = crypto.randomUUID();
 
-app.post('/api/like', likeLimiter, async (req, res) => {
+  const storagePath = `uploads/${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${kind.ext}`;
+  const { error: upErr } = await supabase.storage.from(BUCKET)
+    .upload(storagePath, req.file.buffer, { contentType: kind.mime, upsert: false });
+  if (upErr) {
+    console.error('[upload] storage:', upErr);
+    return res.status(500).json({ error: 'Storage upload failed. Check that the "photos" bucket exists.' });
+  }
+
+  const status = REQUIRE_APPROVAL ? 'pending' : 'live';
+  const { data: photo, error: dbErr } = await supabase.from('photos')
+    .insert({ storage_path: storagePath, caption, op_name: opName, op_token: opToken, uploader_ip_hash: hashIp(clientIp(req)), status })
+    .select('id').single();
+  if (dbErr) {
+    console.error('[upload] db:', dbErr);
+    await supabase.storage.from(BUCKET).remove([storagePath]); // don't leave orphan files
+    return res.status(500).json({ error: 'Upload failed. Please try again.' });
+  }
+
+  res.json({ ok: true, id: photo.id, opName, opToken, status });
+  tick(); // show it right away if the screen is empty
+}));
+
+app.post('/api/like', likeLimiter, wrap(async (req, res) => {
   const photoId = req.body?.photoId;
   if (!photoId) return res.status(400).json({ error: 'photoId is required.' });
+  const ip = clientIp(req);
+  const ipHash = hashIp(ip);
 
-  const ipHash = hashIp(clientIp(req));
-
-  if (await isBadIp(clientIp(req))) {
-    return res.status(403).json({ error: 'Likes are disabled on VPN/proxy connections.' });
-  }
+  if (await isBadIp(ip)) return res.status(403).json({ error: 'Likes are disabled on VPN/proxy connections.' });
 
   const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const { count: likesToday } = await supabase.from('likes')
-    .select('*', { count: 'exact', head: true })
-    .eq('liker_ip_hash', ipHash)
-    .gte('created_at', dayAgo);
+    .select('*', { count: 'exact', head: true }).eq('liker_ip_hash', ipHash).gte('created_at', dayAgo);
   if ((likesToday || 0) >= LIKES_PER_DAY_PER_IP) {
     return res.status(429).json({ error: 'Daily like limit reached. Come back tomorrow.' });
   }
 
-  const { error } = await supabase.from('likes')
-    .insert({ photo_id: photoId, liker_ip_hash: ipHash });
-
+  const { error } = await supabase.from('likes').insert({ photo_id: photoId, liker_ip_hash: ipHash });
   if (error) {
-    if (error.code === '23505') {
-      return res.status(409).json({ error: 'You already liked this photo.' });
-    }
+    if (error.code === '23505') return res.status(409).json({ error: 'You already liked this photo.' });
     console.error('[like]', error);
     return res.status(500).json({ error: 'Like failed.' });
   }
   res.json({ ok: true });
-});
+}));
 
-app.post('/api/comments', commentLimiter, async (req, res) => {
+app.post('/api/comments', commentLimiter, wrap(async (req, res) => {
   const { photoId, body, opToken, parentId } = req.body || {};
   const text = (body || '').toString().trim().slice(0, 500);
-  
-  if (containsMaliciousContent(text)) {
-    return res.status(400).json({ error: 'Comments cannot contain links or external URLs.' });
-  }
-  
-  if (!photoId || !text) {
-    return res.status(400).json({ error: 'photoId and a comment body are required.' });
-  }
+  if (!photoId || !text) return res.status(400).json({ error: 'photoId and a comment body are required.' });
+  if (containsMaliciousContent(text)) return res.status(400).json({ error: 'Comments cannot contain links or external URLs.' });
 
   const ip = clientIp(req);
   const ipHash = hashIp(ip);
-
-  if (await isBadIp(ip)) {
-    return res.status(403).json({ error: 'Comments are disabled on VPN/proxy connections.' });
-  }
+  if (await isBadIp(ip)) return res.status(403).json({ error: 'Comments are disabled on VPN/proxy connections.' });
 
   const { data: lastComment } = await supabase.from('comments')
     .select('created_at').eq('commenter_ip_hash', ipHash)
-    .order('created_at', { ascending: false })
-    .limit(1).maybeSingle();
+    .order('created_at', { ascending: false }).limit(1).maybeSingle();
   if (lastComment && Date.now() - new Date(lastComment.created_at).getTime() < COMMENT_COOLDOWN_SECONDS * 1000) {
     return res.status(429).json({ error: `Please wait ${COMMENT_COOLDOWN_SECONDS} seconds between comments.` });
   }
 
   const { count: onPhoto } = await supabase.from('comments')
-    .select('*', { count: 'exact', head: true })
-    .eq('photo_id', photoId).eq('commenter_ip_hash', ipHash);
+    .select('*', { count: 'exact', head: true }).eq('photo_id', photoId).eq('commenter_ip_hash', ipHash);
   if ((onPhoto || 0) >= COMMENTS_PER_PHOTO_PER_IP) {
     return res.status(429).json({ error: `Max ${COMMENTS_PER_PHOTO_PER_IP} comments per photo.` });
   }
 
   const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const { count: today } = await supabase.from('comments')
-    .select('*', { count: 'exact', head: true })
-    .eq('commenter_ip_hash', ipHash)
-    .gte('created_at', dayAgo);
+    .select('*', { count: 'exact', head: true }).eq('commenter_ip_hash', ipHash).gte('created_at', dayAgo);
   if ((today || 0) >= COMMENTS_PER_DAY_PER_IP) {
     return res.status(429).json({ error: 'Daily comment limit reached. Come back tomorrow.' });
   }
 
-  let authorName = null;
-  let isOp = false;
+  // a reply must point at a top-level comment on the same photo
+  let parent = null;
+  if (parentId) {
+    const { data: p } = await supabase.from('comments')
+      .select('id, photo_id, parent_id').eq('id', parentId).maybeSingle();
+    if (!p || p.photo_id !== photoId || p.parent_id) return res.status(400).json({ error: 'Invalid reply target.' });
+    parent = p.id;
+  }
+
+  let authorName = null, isOp = false;
   if (opToken) {
-    const { data: photo } = await supabase.from('photos')
-      .select('op_token, op_name').eq('id', photoId).maybeSingle();
-    if (photo?.op_token && photo.op_token === opToken) {
-      isOp = true;
-      authorName = photo.op_name;
-    }
+    const { data: photo } = await supabase.from('photos').select('op_token, op_name').eq('id', photoId).maybeSingle();
+    if (photo?.op_token && photo.op_token === opToken) { isOp = true; authorName = photo.op_name; }
   }
 
   const { data: comment, error } = await supabase.from('comments')
-    .insert({ 
-      photo_id: photoId, 
-      commenter_ip_hash: ipHash, 
-      body: text, 
-      author_name: authorName, 
-      is_op: isOp,
-      parent_id: parentId || null 
-    })
-    .select('id, body, author_name, is_op, created_at, parent_id')
-    .single();
-
+    .insert({ photo_id: photoId, commenter_ip_hash: ipHash, body: text, author_name: authorName, is_op: isOp, parent_id: parent })
+    .select('id, body, author_name, is_op, created_at, parent_id').single();
   if (error) {
     console.error('[comment]', error);
     return res.status(500).json({ error: 'Comment failed.' });
   }
-  
-  // Return the newly created comment object for instant frontend display
   res.json(comment);
-});
+}));
 
-app.get('/api/photos/:id/comments', async (req, res) => {
+app.get('/api/photos/:id/comments', wrap(async (req, res) => {
   const { data, error } = await supabase.from('comments')
     .select('id, body, author_name, is_op, created_at, parent_id')
-    .eq('photo_id', req.params.id)
-    .order('created_at', { ascending: true });
-
+    .eq('photo_id', req.params.id).order('created_at', { ascending: true });
   if (error) return res.status(500).json({ error: 'Could not load comments.' });
   res.json(data || []);
-});
+}));
 
 app.post('/api/tick', (req, res) => {
-  if (req.headers['x-cron-secret'] !== process.env.CRON_SECRET) {
+  // previously: if CRON_SECRET was unset, undefined === undefined let everyone in
+  if (!process.env.CRON_SECRET || req.headers['x-cron-secret'] !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'unauthorized' });
   }
   tick();
   res.json({ ok: true });
 });
 
-// --- Admin Authentication & Moderation Routes ---
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change-this-secure-password';
-const adminSessions = new Set();
+// ---------- admin ----------
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+if (!ADMIN_PASSWORD) console.warn('[warn] ADMIN_PASSWORD is not set — admin login is disabled.');
+const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
+const adminSessions = new Map(); // token -> expiry ms
+const SESSION_MS = 12 * 3600 * 1000;
 
-app.post('/api/admin/login', (req, res) => {
+app.post('/api/admin/login', adminLoginLimiter, (req, res) => {
+  if (!ADMIN_PASSWORD) return res.status(503).json({ error: 'Admin login is not configured (set ADMIN_PASSWORD).' });
   const { password } = req.body || {};
-  if (password === ADMIN_PASSWORD) {
+  if (typeof password === 'string' && crypto.timingSafeEqual(sha(password), sha(ADMIN_PASSWORD))) {
     const token = crypto.randomBytes(32).toString('hex');
-    adminSessions.add(token);
+    adminSessions.set(token, Date.now() + SESSION_MS);
     return res.json({ ok: true, token });
   }
   res.status(401).json({ error: 'Invalid admin password.' });
@@ -411,83 +363,71 @@ app.post('/api/admin/login', (req, res) => {
 
 const requireAdmin = (req, res, next) => {
   const token = req.headers['x-admin-token'];
-  if (token && adminSessions.has(token)) {
-    return next();
-  }
+  const exp = token && adminSessions.get(token);
+  if (exp && exp > Date.now()) return next();
+  if (token) adminSessions.delete(token);
   res.status(401).json({ error: 'Unauthorized.' });
 };
 
-app.get('/api/admin/photos', requireAdmin, async (req, res) => {
-  const { data, error } = await supabase
-    .from('photos')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(50);
+app.get('/api/admin/photos', requireAdmin, wrap(async (req, res) => {
+  const { data, error } = await supabase.from('photos')
+    .select('id, storage_path, caption, op_name, status, created_at')
+    .order('created_at', { ascending: false }).limit(100);
   if (error) return res.status(500).json({ error: 'Failed to fetch photos' });
-  res.json(data);
-});
+  res.json((data || []).map((p) => ({
+    ...p,
+    url: supabase.storage.from(BUCKET).getPublicUrl(p.storage_path).data.publicUrl,
+  })));
+}));
 
-app.post('/api/admin/moderate-photo', requireAdmin, async (req, res) => {
-  const { photoId, status } = req.body;
-  if (!['pending', 'live', 'archived', 'rejected'].includes(status)) {
-    return res.status(400).json({ error: 'Invalid status.' });
+app.post('/api/admin/moderate-photo', requireAdmin, wrap(async (req, res) => {
+  const { photoId, status } = req.body || {};
+  if (!photoId || !['pending', 'live', 'archived', 'rejected'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid request.' });
   }
-  const { error } = await supabase
-    .from('photos')
-    .update({ status })
-    .eq('id', photoId);
+  const { error } = await supabase.from('photos').update({ status }).eq('id', photoId);
   if (error) return res.status(500).json({ error: 'Moderation failed.' });
   res.json({ ok: true });
-});
+  tick(); // if the on-screen photo was just rejected, replace it right away
+}));
 
-// Edit photo caption (Admin)
-app.put('/api/admin/photos/:id', requireAdmin, async (req, res) => {
-  const { caption } = req.body;
-  const { error } = await supabase
-    .from('photos')
-    .update({ caption: (caption || '').toString().slice(0, 280) })
-    .eq('id', req.params.id);
+app.put('/api/admin/photos/:id', requireAdmin, wrap(async (req, res) => {
+  const caption = ((req.body || {}).caption || '').toString().slice(0, 280);
+  const { error } = await supabase.from('photos').update({ caption }).eq('id', req.params.id);
   if (error) return res.status(500).json({ error: 'Failed to update caption.' });
   res.json({ ok: true });
-});
+}));
 
-// Delete photo (Admin)
-app.delete('/api/admin/photos/:id', requireAdmin, async (req, res) => {
-  const { error } = await supabase
-    .from('photos')
-    .delete()
-    .eq('id', req.params.id);
+app.delete('/api/admin/photos/:id', requireAdmin, wrap(async (req, res) => {
+  const { data: photo } = await supabase.from('photos').select('storage_path').eq('id', req.params.id).maybeSingle();
+  const { error } = await supabase.from('photos').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: 'Failed to delete photo.' });
+  if (photo?.storage_path) await supabase.storage.from(BUCKET).remove([photo.storage_path]);
   res.json({ ok: true });
-});
+  tick();
+}));
 
-// Force skip current photo (Admin)
-app.post('/api/admin/skip', requireAdmin, async (req, res) => {
-  try {
-    const { error } = await supabase
-      .from('display_state')
-      .update({ started_at: new Date(0).toISOString() })
-      .eq('id', 1);
-    
-    if (error) throw error;
-    await tick();
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('[skip]', err);
-    res.status(500).json({ error: 'Failed to skip photo.' });
-  }
-});
+// Force skip. Old version set started_at = 1970, which made ALL likes count as
+// "session" bonus time, so the photo got thousands of minutes and was never skipped.
+app.post('/api/admin/skip', requireAdmin, wrap(async (req, res) => {
+  await tick(true);
+  res.json({ ok: true });
+}));
 
-app.delete('/api/admin/comments/:id', requireAdmin, async (req, res) => {
-  const { error } = await supabase
-    .from('comments')
-    .delete()
-    .eq('id', req.params.id);
+app.delete('/api/admin/comments/:id', requireAdmin, wrap(async (req, res) => {
+  const { error } = await supabase.from('comments').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: 'Failed to delete comment.' });
   res.json({ ok: true });
+}));
+
+// JSON error handler (so the frontend never gets an HTML error page)
+app.use((err, req, res, next) => {
+  console.error('[unhandled]', err);
+  if (res.headersSent) return next(err);
+  res.status(err.status || 500).json({ error: err.type === 'entity.too.large' ? 'Request too large.' : 'Server error.' });
 });
 
 // ---------- go ----------
 tick();
-setInterval(tick, 5 * 1000);
+setInterval(() => tick(), 5 * 1000);
 app.listen(PORT, () => console.log(`photowall running on :${PORT}`));
