@@ -46,6 +46,43 @@ const clientIp = (req) =>
   (req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || 'unknown').trim();
 const hashIp = (ip) => crypto.createHash('sha256').update(`${ip}:${IP_SALT}`).digest('hex');
 
+// ---------- permanent poster names (one name per IP hash, forever) ----------
+async function getPosterName(ipHash) {
+  const { data } = await supabase.from('posters').select('name').eq('ip_hash', ipHash).maybeSingle();
+  if (data?.name) return data.name;
+
+  // Legacy: this IP posted before the posters table existed -> adopt the name from its first photo
+  const { data: old } = await supabase.from('photos')
+    .select('op_name').eq('uploader_ip_hash', ipHash).not('op_name', 'is', null)
+    .order('created_at', { ascending: true }).limit(1).maybeSingle();
+  if (old?.op_name) {
+    const { error } = await supabase.from('posters').insert({ ip_hash: ipHash, name: old.op_name });
+    if (!error) return old.op_name;
+    const { data: again } = await supabase.from('posters').select('name').eq('ip_hash', ipHash).maybeSingle();
+    return again?.name || null; // name taken by someone else -> treat as unbound
+  }
+  return null;
+}
+
+// Returns { name } (existing or newly bound) or { taken: true } if the requested name is in use.
+async function claimPosterName(ipHash, requested) {
+  const existing = await getPosterName(ipHash);
+  if (existing) return { name: existing, existing: true };
+
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const useRequested = attempt === 0 && requested;
+    const candidate = useRequested ? requested : generateName();
+    const { error } = await supabase.from('posters').insert({ ip_hash: ipHash, name: candidate });
+    if (!error) return { name: candidate };
+    if (error.code !== '23505') throw error;
+    // unique violation: either a parallel request already bound this IP, or the name is taken
+    const raced = await getPosterName(ipHash);
+    if (raced) return { name: raced, existing: true };
+    if (useRequested) return { taken: true };
+  }
+  throw new Error('Could not allocate a poster name');
+}
+
 // Detect real image type from file bytes (don't trust the client's mimetype)
 function sniffImage(buf) {
   if (!buf || buf.length < 12) return null;
@@ -222,7 +259,13 @@ app.post('/api/upload', uploadLimiter, uploadSingle, wrap(async (req, res) => {
   if (containsMaliciousContent(requestedName)) {
     return res.status(400).json({ error: 'Names cannot contain links.' });
   }
-  const opName = requestedName || generateName();
+  // The name is bound to this IP permanently; whatever was typed is ignored if one already exists.
+  const ipHash = hashIp(clientIp(req));
+  const claim = await claimPosterName(ipHash, requestedName);
+  if (claim.taken) {
+    return res.status(409).json({ error: 'That name is already taken. Pick another, or leave it blank for a random one.' });
+  }
+  const opName = claim.name;
   const opToken = crypto.randomUUID();
 
   const storagePath = `uploads/${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${kind.ext}`;
@@ -235,7 +278,7 @@ app.post('/api/upload', uploadLimiter, uploadSingle, wrap(async (req, res) => {
 
   const status = REQUIRE_APPROVAL ? 'pending' : 'live';
   const { data: photo, error: dbErr } = await supabase.from('photos')
-    .insert({ storage_path: storagePath, caption, op_name: opName, op_token: opToken, uploader_ip_hash: hashIp(clientIp(req)), status })
+    .insert({ storage_path: storagePath, caption, op_name: opName, op_token: opToken, uploader_ip_hash: ipHash, status })
     .select('id').single();
   if (dbErr) {
     console.error('[upload] db:', dbErr);
@@ -245,6 +288,11 @@ app.post('/api/upload', uploadLimiter, uploadSingle, wrap(async (req, res) => {
 
   res.json({ ok: true, id: photo.id, opName, opToken, status });
   tick(); // show it right away if the screen is empty
+}));
+
+app.get('/api/my-name', wrap(async (req, res) => {
+  const name = await getPosterName(hashIp(clientIp(req)));
+  res.json({ name: name || null });
 }));
 
 app.post('/api/like', likeLimiter, wrap(async (req, res) => {
