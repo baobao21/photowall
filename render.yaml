@@ -25,5 +25,9 @@ services:
         sync: false
       - key: TRUST_PROXY_HOPS   # proxies in front of the app; verify with /api/admin/whoami
         value: "2"
-      - key: REQUIRE_APPROVAL   # "true" = new uploads wait for admin approval
-        value: "false"
+      - key: REQUIRE_APPROVAL   # "true" (default) = new uploads wait for admin approval
+        value: "true"
+      - key: SUPABASE_ANON_KEY  # optional but recommended: used only to verify passwords at login
+        sync: false
+      - key: SESSION_SECRET     # optional: random string that signs login sessions
+        sync: false
