@@ -116,12 +116,16 @@ const likeLimiter = rateLimit({
 });
 
 // ---------- display logic ----------
-async function getEngagement(photoId, startedAt) {
-  const [l, c] = await Promise.all([
-    supabase.from('likes').select('*', { count: 'exact', head: true }).eq('photo_id', photoId).gte('created_at', startedAt),
-    supabase.from('comments').select('*', { count: 'exact', head: true }).eq('photo_id', photoId).gte('created_at', startedAt),
+async function getEngagement(photoId, startedAt, uploaderIpHash) {
+  const [likesRes, commentsRes] = await Promise.all([
+    supabase.from('likes').select('liker_ip_hash').eq('photo_id', photoId).gte('created_at', startedAt),
+    supabase.from('comments').select('is_op, commenter_ip_hash').eq('photo_id', photoId).gte('created_at', startedAt),
   ]);
-  return { likes: l.count || 0, comments: c.count || 0 };
+
+  const validLikes = (likesRes.data || []).filter(l => l.liker_ip_hash !== uploaderIpHash);
+  const validComments = (commentsRes.data || []).filter(c => !c.is_op && c.commenter_ip_hash !== uploaderIpHash);
+
+  return { likes: validLikes.length, comments: validComments.length };
 }
 
 function remainingSeconds(startedAt, engagement) {
@@ -136,11 +140,11 @@ async function getCurrentDisplay() {
   if (!state?.photo_id) return null;
 
   const { data: photo } = await supabase
-    .from('photos').select('id, caption, storage_path, op_name, created_at')
+    .from('photos').select('id, caption, storage_path, op_name, created_at, uploader_ip_hash')
     .eq('id', state.photo_id).single();
   if (!photo) return null;
 
-  const engagement = await getEngagement(photo.id, state.started_at);
+  const engagement = await getEngagement(photo.id, state.started_at, photo.uploader_ip_hash);
   const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(photo.storage_path);
 
   return {
@@ -283,7 +287,7 @@ app.post('/api/like', likeLimiter, async (req, res) => {
 });
 
 app.post('/api/comments', commentLimiter, async (req, res) => {
-  const { photoId, body, opToken } = req.body || {};
+  const { photoId, body, opToken, parentId } = req.body || {};
   const text = (body || '').toString().trim().slice(0, 500);
   
   if (containsMaliciousContent(text)) {
@@ -336,24 +340,30 @@ app.post('/api/comments', commentLimiter, async (req, res) => {
     }
   }
 
-  const { data: comment, error } = await supabase.from('comments')
-    .insert({ photo_id: photoId, commenter_ip_hash: ipHash, body: text, author_name: authorName, is_op: isOp })
-    .select('id, body, author_name, is_op, created_at')
-    .single();
+  const { error } = await supabase.from('comments')
+    .insert({ 
+      photo_id: photoId, 
+      commenter_ip_hash: ipHash, 
+      body: text, 
+      author_name: authorName, 
+      is_op: isOp,
+      parent_id: parentId || null 
+    });
 
   if (error) {
     console.error('[comment]', error);
     return res.status(500).json({ error: 'Comment failed.' });
   }
-  res.json(comment);
+  
+  // Responding with ok: true prevents immediate dynamic DOM insertion on the frontend until refresh
+  res.json({ ok: true });
 });
 
 app.get('/api/photos/:id/comments', async (req, res) => {
   const { data, error } = await supabase.from('comments')
-    .select('id, body, author_name, is_op, created_at')
+    .select('id, body, author_name, is_op, created_at, parent_id')
     .eq('photo_id', req.params.id)
-    .order('created_at', { ascending: false })
-    .limit(100);
+    .order('created_at', { ascending: true });
 
   if (error) return res.status(500).json({ error: 'Could not load comments.' });
   res.json(data || []);
