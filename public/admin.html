@@ -68,9 +68,8 @@ async function loadPhotos() {
       return;
     }
 
-    // Generate public URLs for Supabase storage paths
-    // Note: Supabase public URL structure is /storage/v1/object/public/BUCKET_NAME/path
     list.innerHTML = photos.map(p => {
+      // Using your actual Supabase project reference: xktxwljgckpnvkcsjirl
       const imgUrl = `https://xktxwljgckpnvkcsjirl.supabase.co/storage/v1/object/public/photos/${p.storage_path}`;
       return `
         <div class="photo-card">
@@ -83,7 +82,8 @@ async function loadPhotos() {
           </div>
           <div>
             <button onclick="setStatus('${p.id}', 'live')" style="background:#6ee7a0; color:#000;">Approve (Live)</button><br>
-            <button onclick="setStatus('${p.id}', 'rejected')">Reject</button>
+            <button onclick="setStatus('${p.id}', 'rejected')">Reject</button><br>
+            <button onclick="deletePhoto('${p.id}')" style="background:#333; margin-top:5px;">Delete</button>
           </div>
         </div>
       `;
@@ -103,6 +103,19 @@ async function setStatus(photoId, status) {
     loadPhotos();
   } else {
     alert('Failed to update photo status.');
+  }
+}
+
+async function deletePhoto(photoId) {
+  if (!confirm('Are you sure you want to completely delete this photo?')) return;
+  const res = await fetch('/api/admin/photos/' + photoId, {
+    method: 'DELETE',
+    headers: { 'x-admin-token': token }
+  });
+  if (res.ok) {
+    loadPhotos();
+  } else {
+    alert('Failed to delete photo.');
   }
 }
 </script>
