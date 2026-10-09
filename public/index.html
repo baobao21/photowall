@@ -268,7 +268,6 @@ async function loadComments(photoId) {
   } catch (e) {}
 }
 
-// Countdown timer
 setInterval(() => {
   if (!state.photo) { $('timer').textContent = '--:--';$('bar').style.width = '0%'; return; }
   if (state.remainingSeconds > 0) state.remainingSeconds--;
@@ -321,7 +320,6 @@ $('cform').onsubmit = async (e) => {
   } catch (e) {}
 };
 
-// Upload & drag-drop logic
 let pickedFile = null;
 const drop = $('drop'), fileInput =$('file');
 
@@ -354,7 +352,7 @@ $('uploadBtn').onclick = async () => {
   const fd = new FormData();
   fd.append('photo', pickedFile);
   fd.append('caption', $('captionInput').value);
-  fd.append('opName', $('nameInput').value);
+  fd.append('opName', $('nameInput' ).value);
   try {
     const res = await fetch('/api/upload', { method: 'POST', body: fd });
     const data = await res.json();
