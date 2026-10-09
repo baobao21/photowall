@@ -174,6 +174,7 @@
     <small id="mHelp"></small>
     <button class="primary" id="mSubmit">Sign in</button>
     <div class="msg" id="mMsg"></div>
+    <button type="button" class="reply-btn" id="mForgot" style="display:none">Forgot password?</button>
     <button type="button" class="reply-btn" id="mSwitch"></button>
     <button type="button" class="reply-btn" id="mClose" style="color:var(--muted)">Close</button>
   </div>
@@ -210,11 +211,6 @@
         <div class="c-msg" id="cmsg"></div>
       </div>
     </div>
-  </div>
-
-  <div class="card" id="profileCard" style="display:none; margin-top:16px">
-    <h2 style="font-size:15px">👤 <span id="pName"></span> — your uploads</h2>
-    <div id="pPhotos"></div>
   </div>
 
   <div class="card upload">
@@ -363,8 +359,9 @@ async function refresh() {
     $('commentCount').textContent = data.engagement.comments;
 
     const btn = $('likeBtn');
-    btn.disabled = !newPhotoId || !!liked[newPhotoId];
-    btn.textContent = (newPhotoId && liked[newPhotoId]) ? '✓ Liked' : '❤ Like this photo';
+    const isMine = !!(auth && data.photo && data.photo.opName && data.photo.opName.toLowerCase() === auth.username.toLowerCase());
+    btn.disabled = !newPhotoId || !!liked[newPhotoId] || isMine;
+    btn.textContent = isMine ? 'Your photo' : (newPhotoId && liked[newPhotoId]) ? '✓ Liked' : '❤ Like this photo';
 
     if (lastSeenSeconds !== null && data.remainingSeconds > lastSeenSeconds + 3) {
       $('timer').classList.add('pulse');
@@ -398,7 +395,7 @@ $('likeBtn').onclick = async () => {
   try {
     const res = await fetch('/api/like', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ photoId: state.photo.id }),
     });
     const data = await res.json().catch(() => ({}));
@@ -478,7 +475,9 @@ $('uploadBtn').onclick = async () => {
       pickedFile = null; fileInput.value = '';
       $('preview').style.display = 'none';$('dropText').textContent = 'Click or drop a photo here (max 8 MB)';
       $('captionInput').value = '';
-      loadProfile();
+      const a = document.createElement('a');
+      a.href = '/profile'; a.textContent = ' View your profile →'; a.style.color = 'var(--accent)';
+      $('umsg').appendChild(a);
     } else {
       umsg(data.error || 'Upload failed.', false);
     }
@@ -488,7 +487,6 @@ $('uploadBtn').onclick = async () => {
 // ---------- accounts ----------
 let auth = null;
 try { auth = JSON.parse(localStorage.getItem('auth') || 'null'); } catch (e) {}
-let me = null;
 let modalMode = 'signin';
 function authHeaders() { return auth ? { Authorization: 'Bearer ' + auth.token } : {}; }
 function saveAuth(a) {
@@ -499,7 +497,7 @@ function saveAuth(a) {
 function renderAuth() {
   const box = $('authBox');
   if (auth) {
-    box.innerHTML = '<span class="who">👤 ' + escapeHtml(auth.username) + '</span><button class="auth-btn" id="logoutBtn">Log out</button>';
+    box.innerHTML = '<a class="auth-btn" href="/profile" target="_self">👤 ' + escapeHtml(auth.username) + '</a><button class="auth-btn" id="logoutBtn">Log out</button>';
     $('logoutBtn').onclick = logout;
   } else {
     box.innerHTML = '<button class="auth-btn" id="signinBtn">Sign in</button><button class="auth-btn alt" id="signupBtn">Sign up</button>';
@@ -509,74 +507,52 @@ function renderAuth() {
   $('uploadGate').innerHTML = 'Sign in or create a free account to upload photos.<br><small>Liking and commenting don\'t need an account.</small>';
   $('uploadGate').style.display = auth ? 'none' : 'block';
   $('uploadForm').style.display = auth ? 'block' : 'none';
-  $('profileCard').style.display = auth ? 'block' : 'none';
-  $('pName').textContent = auth ? auth.username : '';
 }
-
-function logout() { saveAuth(null); me = null; renderAuth(); }
-
-async function loadProfile() {
-  if (!auth) return;
-  try {
-    const res = await fetch('/api/me', { headers: authHeaders() });
-    if (res.status === 401) return logout();
-    me = await res.json();
-    renderProfile();
-  } catch (e) {}
-}
-
-function renderProfile() {
-  if (!me) return;
-  const warn = me.ipMatches ? '' : '<div class="msg err">⚠ Your account is locked to a different connection, so uploads are blocked here. Ask the admin to reset your IP lock.</div>';
-  const label = { live: 'Live ✓', pending: 'Waiting for approval', rejected: 'Rejected', archived: 'Archived' };
-  const list = (me.photos || []).map((p) =>
-    '<div class="p-item"><img src="' + escapeHtml(p.url) + '" alt=""><div><b class="st-' + escapeHtml(p.status) + '">' +
-    escapeHtml(label[p.status] || p.status) + '</b><br><small>' + escapeHtml(p.caption || '') + '</small></div></div>'
-  ).join('') || '<div class="empty" style="padding:10px">No uploads yet.</div>';
-  $('pPhotos').innerHTML = warn + list;
-}
+function logout() { saveAuth(null); renderAuth(); refresh(); }
 
 function openModal(mode) {
   modalMode = mode;
-  const up = mode === 'signup';
-  $('mTitle').textContent = up ? 'Create account' : 'Sign in';
+  const up = mode === 'signup', fg = mode === 'forgot';
+  $('mTitle').textContent = up ? 'Create account' : fg ? 'Reset password' : 'Sign in';
   $('mUser').style.display = up ? 'block' : 'none';
-  $('mSubmit').textContent = up ? 'Sign up' : 'Sign in';
-  $('mSwitch').textContent = up ? 'Have an account? Sign in' : 'No account? Sign up';
-  $('mHelp').textContent = up ? 'Your username is permanent and shown on your photos. Your account is locked to your internet connection (one account per IP).' : '';
+  $('mPass').style.display = fg ? 'none' : 'block';
+  $('mSubmit').textContent = up ? 'Sign up' : fg ? 'Send reset link' : 'Sign in';
+  $('mSwitch').textContent = mode === 'signin' ? 'No account? Sign up' : up ? 'Have an account? Sign in' : '← Back to sign in';
+  $('mForgot').style.display = mode === 'signin' ? 'block' : 'none';
+  $('mHelp').textContent = up ? 'Your username is permanent and shown on your photos. Your account is locked to your internet connection (one account per IP).'
+    : fg ? 'Enter your account email and we\'ll send you a link to choose a new password.' : '';
   $('mPass').autocomplete = up ? 'new-password' : 'current-password';
   $('mMsg').textContent = '';
   $('modal').style.display = 'flex';
 }
-$('mSwitch').onclick = () => openModal(modalMode === 'signup' ? 'signin' : 'signup');
+$('mSwitch').onclick = () => openModal(modalMode === 'signin' ? 'signup' : 'signin');
+$('mForgot').onclick = () => openModal('forgot');
 $('mClose').onclick = () => { $('modal').style.display = 'none'; };
 $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) $('modal').style.display = 'none'; });
 
 $('mSubmit').onclick = async () => {
-  const body = { email: $('mEmail').value.trim(), password: $('mPass').value };
+  const body = { email: $('mEmail').value.trim() };
+  if (modalMode !== 'forgot') body.password = $('mPass').value;
   if (modalMode === 'signup') body.username = $('mUser').value.trim();
+  const endpoint = { signin: 'login', signup: 'signup', forgot: 'forgot' }[modalMode];
   $('mMsg').className = 'msg ok'; $('mMsg').textContent = 'Please wait…';
   try {
-    const res = await fetch('/api/auth/' + (modalMode === 'signup' ? 'signup' : 'login'), {
+    const res = await fetch('/api/auth/' + endpoint, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-      saveAuth({ token: data.token, username: data.profile.username });
-      $('modal').style.display = 'none';
-      $('mPass').value = '';
-      renderAuth();
-      loadProfile();
-    } else {
-      $('mMsg').className = 'msg err';
-      $('mMsg').textContent = data.error || 'Something went wrong.';
-    }
+    if (!res.ok) { $('mMsg').className = 'msg err'; $('mMsg').textContent = data.error || 'Something went wrong.'; return; }
+    if (modalMode === 'forgot') { $('mMsg').className = 'msg ok'; $('mMsg').textContent = data.message || 'Check your email.'; return; }
+    saveAuth({ token: data.token, username: data.profile.username });
+    $('modal').style.display = 'none';
+    $('mPass').value = '';
+    renderAuth();
+    refresh();
   } catch (e) { $('mMsg').className = 'msg err'; $('mMsg').textContent = 'Network error. Try again.'; }
 };
 
 refresh();
 renderAuth();
-loadProfile();
 </script>
 </body>
 </html>
