@@ -125,7 +125,7 @@ async function getEngagement(photoId) {
 }
 
 function remainingSeconds(startedAt, engagement) {
-  const baseEnd = new Date(startedAt).getTime() + BASE_SECONDS * 60 * 1000;
+  const baseEnd = new Date(startedAt).getTime() + BASE_SECONDS * 1000;
   const bonus = (engagement.likes * LIKE_MINUTES + engagement.comments * COMMENT_MINUTES) * 60 * 1000;
   return Math.max(0, Math.round((baseEnd + bonus - Date.now()) / 1000));
 }
@@ -443,5 +443,5 @@ app.delete('/api/admin/comments/:id', requireAdmin, async (req, res) => {
 });
 
 // ---------- go ----------
-setInterval(tick, 30 * 1000);
+setInterval(tick, 5 * 1000);
 app.listen(PORT, () => console.log(`photowall running on :${PORT}`));
