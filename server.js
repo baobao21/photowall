@@ -1,6 +1,7 @@
 require('dotenv').config();
 const path = require('path');
 const crypto = require('crypto');
+const net = require('net');
 const express = require('express');
 const multer = require('multer');
 const rateLimit = require('express-rate-limit');
@@ -54,7 +55,20 @@ if (!process.env.IP_SALT) {
 // Never trust the raw X-Forwarded-For header: the client can put anything in it, which lets
 // someone get unlimited fake IPs. Express's req.ip only trusts the proxy hops we configure.
 const clientIp = (req) => (req.ip || req.socket.remoteAddress || 'unknown').replace(/^::ffff:/, '');
-const hashIp = (ip) => crypto.createHash('sha256').update(`${ip}:${IP_SALT}`).digest('hex');
+// IPv6: one household/phone gets an entire /64 and its devices rotate "privacy" addresses inside it
+// (and each incognito window/tab may use a new one). Treat the whole /64 as ONE identity.
+// IPv4 addresses are returned unchanged, so existing hashes stay valid.
+function normalizeIp(raw) {
+  let ip = String(raw || '').trim().replace(/%.*$/, '').replace(/^::ffff:/i, '');
+  if (!net.isIPv6(ip)) return ip;
+  const [head, tail] = ip.split('::');
+  const h = head ? head.split(':') : [];
+  const t = ip.includes('::') && tail ? tail.split(':') : [];
+  const fill = ip.includes('::') ? Array(Math.max(0, 8 - h.length - t.length)).fill('0') : [];
+  const groups = [...h, ...fill, ...t];
+  return groups.slice(0, 4).map((g) => parseInt(g || '0', 16).toString(16)).join(':') + '::/64';
+}
+const hashIp = (ip) => crypto.createHash('sha256').update(`${normalizeIp(ip)}:${IP_SALT}`).digest('hex');
 
 // Detect real image type from file bytes (don't trust the client's mimetype)
 function sniffImage(buf) {
@@ -103,11 +117,12 @@ async function isBadIp(ip) {
 app.set('trust proxy', parseInt(process.env.TRUST_PROXY_HOPS || '2', 10));
 app.use(express.json({ limit: '20kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/profile', (req, res) => res.sendFile(path.join(__dirname, 'public', 'profile.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
 const limiterOpts = (windowMs, max, message) => ({
   windowMs, max, standardHeaders: true, legacyHeaders: false,
-  keyGenerator: (req) => clientIp(req),
+  keyGenerator: (req) => normalizeIp(clientIp(req)),
   validate: false, // we key on our own clientIp(); skip the library's IP self-checks (works on v7 and v8)
   ...(message ? { message: { error: message } } : {}),
 });
@@ -313,11 +328,74 @@ app.get('/api/me', requireUser, wrap(async (req, res) => {
   const { data } = await supabase.from('photos')
     .select('id, storage_path, caption, status, created_at')
     .eq('user_id', p.user_id).order('created_at', { ascending: false }).limit(30);
+  const { data: u } = await supabase.auth.admin.getUserById(p.user_id);
   res.json({
     username: p.username,
+    email: u?.user?.email || null,
     ipMatches: !p.ip_hash || p.ip_hash === hashIp(clientIp(req)),
     photos: (data || []).map((x) => ({ ...x, url: supabase.storage.from(BUCKET).getPublicUrl(x.storage_path).data.publicUrl })),
   });
+}));
+
+// ---------- password recovery (Supabase sends the email; our page sets the new password) ----------
+const forgotLimiter = rateLimit(limiterOpts(60 * 60 * 1000, 5, 'Too many reset requests. Try again later.'));
+const resetLimiter = rateLimit(limiterOpts(60 * 60 * 1000, 10, 'Too many attempts. Try again later.'));
+const siteUrl = (req) => (process.env.SITE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
+const validPassword = (p) => typeof p === 'string' && p.length >= 8 && p.length <= 72;
+
+app.post('/api/auth/forgot', forgotLimiter, wrap(async (req, res) => {
+  const em = String((req.body || {}).email || '').trim().toLowerCase();
+  const generic = { ok: true, message: 'If an account exists for that email, a reset link has been sent. Check your inbox and spam folder.' };
+  if (!EMAIL_RE.test(em)) return res.json(generic); // same answer either way: don't reveal which emails exist
+  const client = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
+    { ...clientOpts, auth: { persistSession: false, autoRefreshToken: false, flowType: 'implicit' } });
+  const { error } = await client.auth.resetPasswordForEmail(em, { redirectTo: `${siteUrl(req)}/reset.html` });
+  if (error) {
+    console.error('[forgot]', error.message);
+    return res.status(503).json({ error: 'Could not send the reset email right now. Try again later.' });
+  }
+  res.json(generic);
+}));
+
+app.post('/api/auth/reset', resetLimiter, wrap(async (req, res) => {
+  const { token, password } = req.body || {};
+  if (typeof token !== 'string' || token.length < 20 || token.length > 4096) {
+    return res.status(400).json({ error: 'This reset link is invalid or has expired.' });
+  }
+  if (!validPassword(password)) return res.status(400).json({ error: 'Password must be 8–72 characters.' });
+  const { data, error } = await supabase.auth.getUser(token); // proves the token came from a real reset email
+  if (error || !data?.user) return res.status(400).json({ error: 'This reset link is invalid or has expired.' });
+  const { error: uErr } = await supabase.auth.admin.updateUserById(data.user.id, { password });
+  if (uErr) {
+    console.error('[reset]', uErr.message);
+    return res.status(500).json({ error: 'Could not update the password.' });
+  }
+  res.json({ ok: true });
+}));
+
+app.post('/api/me/password', loginLimiter, requireUser, wrap(async (req, res) => {
+  const { current, password } = req.body || {};
+  if (!validPassword(password)) return res.status(400).json({ error: 'New password must be 8–72 characters.' });
+  const { data: u } = await supabase.auth.admin.getUserById(req.profile.user_id);
+  const email = u?.user?.email;
+  if (!email) return res.status(404).json({ error: 'Account not found.' });
+  const client = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY, clientOpts);
+  const { error } = await client.auth.signInWithPassword({ email, password: String(current || '') });
+  if (error) return res.status(403).json({ error: 'Current password is incorrect.' });
+  const { error: uErr } = await supabase.auth.admin.updateUserById(req.profile.user_id, { password });
+  if (uErr) return res.status(500).json({ error: 'Could not update the password.' });
+  res.json({ ok: true });
+}));
+
+app.delete('/api/me/photos/:id', requireUser, wrap(async (req, res) => {
+  const { data: photo } = await supabase.from('photos').select('storage_path, user_id').eq('id', req.params.id).maybeSingle();
+  if (!photo || photo.user_id !== req.profile.user_id) return res.status(404).json({ error: 'Photo not found.' });
+  const { error } = await supabase.from('photos').delete().eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: 'Could not delete the photo.' });
+  await supabase.storage.from(BUCKET).remove([photo.storage_path]);
+  res.json({ ok: true });
+  tick();
 }));
 
 // ---------- upload (account required) ----------
@@ -388,6 +466,13 @@ app.post('/api/like', likeLimiter, wrap(async (req, res) => {
   if (!photoId) return res.status(400).json({ error: 'photoId is required.' });
   const ip = clientIp(req);
   const ipHash = hashIp(ip);
+
+  const me = await optionalUser(req);
+  const { data: target } = await supabase.from('photos').select('user_id, uploader_ip_hash, status').eq('id', photoId).maybeSingle();
+  if (!target) return res.status(404).json({ error: 'Photo not found.' });
+  if (target.uploader_ip_hash === ipHash || (me && target.user_id && target.user_id === me.user_id)) {
+    return res.status(403).json({ error: "You can't like your own photo." });
+  }
 
   if (await isBadIp(ip)) return res.status(403).json({ error: 'Likes are disabled on VPN/proxy connections.' });
 
@@ -511,7 +596,7 @@ const requireAdmin = (req, res, next) => {
 
 // Open this while logged in to confirm the server sees YOUR real public IP.
 app.get('/api/admin/whoami', requireAdmin, (req, res) => {
-  res.json({ detectedIp: clientIp(req), xForwardedFor: req.headers['x-forwarded-for'] || null, trustProxyHops: app.get('trust proxy') });
+  res.json({ detectedIp: clientIp(req), identityUsed: normalizeIp(clientIp(req)), hashPrefix: hashIp(clientIp(req)).slice(0, 8), xForwardedFor: req.headers['x-forwarded-for'] || null, trustProxyHops: app.get('trust proxy') });
 });
 
 app.get('/api/admin/photos', requireAdmin, wrap(async (req, res) => {
