@@ -117,20 +117,36 @@ const likeLimiter = rateLimit({
 
 // ---------- display logic ----------
 async function getEngagement(photoId, startedAt, uploaderIpHash) {
-  const [likesRes, commentsRes] = await Promise.all([
+  // 1. Get total all-time counts to display on the frontend UI
+  const [totalLikes, totalComments] = await Promise.all([
+    supabase.from('likes').select('*', { count: 'exact', head: true }).eq('photo_id', photoId),
+    supabase.from('comments').select('*', { count: 'exact', head: true }).eq('photo_id', photoId),
+  ]);
+
+  // 2. Get session-specific engagement (current rotation + non-OP) for time calculation
+  const [sessionLikesRes, sessionCommentsRes] = await Promise.all([
     supabase.from('likes').select('liker_ip_hash').eq('photo_id', photoId).gte('created_at', startedAt),
     supabase.from('comments').select('is_op, commenter_ip_hash').eq('photo_id', photoId).gte('created_at', startedAt),
   ]);
 
-  const validLikes = (likesRes.data || []).filter(l => l.liker_ip_hash !== uploaderIpHash);
-  const validComments = (commentsRes.data || []).filter(c => !c.is_op && c.commenter_ip_hash !== uploaderIpHash);
+  const validSessionLikes = (sessionLikesRes.data || []).filter(l => l.liker_ip_hash !== uploaderIpHash);
+  const validSessionComments = (sessionCommentsRes.data || []).filter(c => !c.is_op && c.commenter_ip_hash !== uploaderIpHash);
 
-  return { likes: validLikes.length, comments: validComments.length };
+  return {
+    display: {
+      likes: totalLikes.count || 0,
+      comments: totalComments.count || 0,
+    },
+    session: {
+      likes: validSessionLikes.length,
+      comments: validSessionComments.length,
+    }
+  };
 }
 
-function remainingSeconds(startedAt, engagement) {
+function remainingSeconds(startedAt, sessionEngagement) {
   const baseEnd = new Date(startedAt).getTime() + BASE_SECONDS * 1000;
-  const bonus = (engagement.likes * LIKE_MINUTES + engagement.comments * COMMENT_MINUTES) * 60 * 1000;
+  const bonus = (sessionEngagement.likes * LIKE_MINUTES + sessionEngagement.comments * COMMENT_MINUTES) * 60 * 1000;
   return Math.max(0, Math.round((baseEnd + bonus - Date.now()) / 1000));
 }
 
@@ -144,7 +160,7 @@ async function getCurrentDisplay() {
     .eq('id', state.photo_id).single();
   if (!photo) return null;
 
-  const engagement = await getEngagement(photo.id, state.started_at, photo.uploader_ip_hash);
+  const engagementData = await getEngagement(photo.id, state.started_at, photo.uploader_ip_hash);
   const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(photo.storage_path);
 
   return {
@@ -155,8 +171,8 @@ async function getCurrentDisplay() {
       opName: photo.op_name,
       uploadedAt: photo.created_at,
     },
-    engagement,
-    remainingSeconds: remainingSeconds(state.started_at, engagement),
+    engagement: engagementData.display,
+    remainingSeconds: remainingSeconds(state.started_at, engagementData.session),
     startedAt: state.started_at,
   };
 }
@@ -340,7 +356,7 @@ app.post('/api/comments', commentLimiter, async (req, res) => {
     }
   }
 
-  const { error } = await supabase.from('comments')
+  const { data: comment, error } = await supabase.from('comments')
     .insert({ 
       photo_id: photoId, 
       commenter_ip_hash: ipHash, 
@@ -348,15 +364,17 @@ app.post('/api/comments', commentLimiter, async (req, res) => {
       author_name: authorName, 
       is_op: isOp,
       parent_id: parentId || null 
-    });
+    })
+    .select('id, body, author_name, is_op, created_at, parent_id')
+    .single();
 
   if (error) {
     console.error('[comment]', error);
     return res.status(500).json({ error: 'Comment failed.' });
   }
   
-  // Responding with ok: true prevents immediate dynamic DOM insertion on the frontend until refresh
-  res.json({ ok: true });
+  // Return the newly created comment object for instant frontend display
+  res.json(comment);
 });
 
 app.get('/api/photos/:id/comments', async (req, res) => {
