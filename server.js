@@ -369,3 +369,76 @@ app.post('/api/tick', (req, res) => {
 // ---------- go ----------
 setInterval(tick, 30 * 1000);
 app.listen(PORT, () => console.log(`photowall running on :${PORT}`));
+
+// --- Admin Authentication & Moderation ---
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change-this-secure-password';
+
+// Simple session store for admin tokens
+const adminSessions = new Set();
+
+// Malicious link & spam blocker function
+function containsMaliciousContent(text) {
+  if (!text) return false;
+  // Regex to detect URLs, IP addresses, or common phishing/spam patterns
+  const urlRegex = /(https?:\/\/|www\.|[a-zA-Z0-9-]+\.(com|net|org|ru|xyz|top|cn|info|tk))/i;
+  return urlRegex.test(text);
+}
+
+
+
+
+// Admin Login Route
+app.post('/api/admin/login', (req, res) => {
+  const { password } = req.body || {};
+  if (password === ADMIN_PASSWORD) {
+    const token = crypto.randomBytes(32).toString('hex');
+    adminSessions.add(token);
+    // Send token back (or set as secure cookie)
+    return res.json({ ok: true, token });
+  }
+  res.status(401).json({ error: 'Invalid admin password.' });
+});
+
+// Middleware to check admin token
+const requireAdmin = (req, res, next) => {
+  const token = req.headers['x-admin-token'];
+  if (token && adminSessions.has(token)) {
+    return next();
+  }
+  res.status(401).json({ error: 'Unauthorized.' });
+};
+
+// Get pending/all photos for moderation
+app.get('/api/admin/photos', requireAdmin, async (req, res) => {
+  const { data, error } = await supabase
+    .from('photos')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) return res.status(500).json({ error: 'Failed to fetch photos' });
+  res.json(data);
+});
+
+// Moderate photo status (e.g., set status to 'rejected' or 'live')
+app.post('/api/admin/moderate-photo', requireAdmin, async (req, res) => {
+  const { photoId, status } = req.body;
+  if (!['pending', 'live', 'archived', 'rejected'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid status.' });
+  }
+  const { error } = await supabase
+    .from('photos')
+    .update({ status })
+    .eq('id', photoId);
+  if (error) return res.status(500).json({ error: 'Moderation failed.' });
+  res.json({ ok: true });
+});
+
+// Delete a comment
+app.delete('/api/admin/comments/:id', requireAdmin, async (req, res) => {
+  const { error } = await supabase
+    .from('comments')
+    .delete()
+    .eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: 'Failed to delete comment.' });
+  res.json({ ok: true });
+});
