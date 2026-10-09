@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>THE WALL — Admin Moderation</title>
+<style>
+  body { background: #0d0d12; color: #eaeaf0; font-family: sans-serif; padding: 20px; max-width: 900px; margin: 0 auto; }
+  input, button { padding: 10px; margin: 5px 0; background: #16161e; color: #fff; border: 1px solid #262633; border-radius: 8px; }
+  button { background: #ef476f; cursor: pointer; font-weight: bold; }
+  .photo-card { background: #16161e; border: 1px solid #262633; padding: 15px; margin-bottom: 15px; border-radius: 10px; display: flex; gap: 15px; align-items: center; }
+  .photo-card img { width: 100px; height: 100px; object-fit: cover; border-radius: 6px; }
+</style>
+</head>
+<body>
+  <h1>Admin Moderation Panel</h1>
+  <div id="loginSection">
+    <input type="password" id="passInput" placeholder="Enter Admin Password">
+    <button onclick="login()">Login</button>
+  </div>
+  
+  <div id="dashboard" style="display:none;">
+    <h2>Queue & Uploads</h2>
+    <div id="photoList">Loading...</div>
+  </div>
+
+<script>
+let token = localStorage.getItem('adminToken') || '';
+
+if (token) {
+  document.getElementById('loginSection').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+  loadPhotos();
+}
+
+async function login() {
+  const password = document.getElementById('passInput').value;
+  const res = await fetch('/api/admin/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password })
+  });
+  const data = await res.json();
+  if (res.ok) {
+    token = data.token;
+    localStorage.setItem('adminToken', token);
+    document.getElementById('loginSection').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    loadPhotos();
+  } else {
+    alert(data.error);
+  }
+}
+
+async function loadPhotos() {
+  const res = await fetch('/api/admin/photos', {
+    headers: { 'x-admin-token': token }
+  });
+  const photos = await res.json();
+  const list = document.getElementById('photoList');
+  list.innerHTML = photos.map(p => `
+    <div class="photo-card">
+      <div>
+        <p><b>Status:</b> ${p.status}</p>
+        <p><b>Caption:</b> ${p.caption || 'None'}</p>
+        <p><small>${p.created_at}</small></p>
+      </div>
+      <div>
+        <button onclick="setStatus('${p.id}', 'live')">Approve / Live</button>
+        <button onclick="setStatus('${p.id}', 'rejected')" style="background:#333;">Reject</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function setStatus(photoId, status) {
+  await fetch('/api/admin/moderate-photo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-token': token },
+    body: JSON.stringify({ photoId, status })
+  });
+  loadPhotos();
+}
+</script>
+</body>
+</html>
