@@ -42,8 +42,9 @@ const IP_SALT = process.env.IP_SALT || crypto.randomBytes(32).toString('hex');
 if (!process.env.IP_SALT) {
   console.warn('[warn] IP_SALT is not set — using a random one for this run. Likes will reset on restart.');
 }
-const clientIp = (req) =>
-  (req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || 'unknown').trim();
+// Never trust the raw X-Forwarded-For header: the client can put anything in it, which lets
+// someone get unlimited fake IPs. Express's req.ip only trusts the proxy hops we configure.
+const clientIp = (req) => (req.ip || req.socket.remoteAddress || 'unknown').replace(/^::ffff:/, '');
 const hashIp = (ip) => crypto.createHash('sha256').update(`${ip}:${IP_SALT}`).digest('hex');
 
 // ---------- permanent poster names (one name per IP hash, forever) ----------
@@ -127,7 +128,7 @@ async function isBadIp(ip) {
 }
 
 // ---------- middleware ----------
-app.set('trust proxy', 1);
+app.set('trust proxy', parseInt(process.env.TRUST_PROXY_HOPS || '2', 10));
 app.use(express.json({ limit: '20kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
@@ -149,10 +150,11 @@ async function getEngagement(photoId, startedAt, uploaderIpHash) {
     supabase.from('likes').select('*', { count: 'exact', head: true }).eq('photo_id', photoId),
     supabase.from('comments').select('*', { count: 'exact', head: true }).eq('photo_id', photoId),
     supabase.from('likes').select('liker_ip_hash').eq('photo_id', photoId).gte('created_at', startedAt),
-    supabase.from('comments').select('is_op, commenter_ip_hash').eq('photo_id', photoId).gte('created_at', startedAt),
+    supabase.from('comments').select('is_op, commenter_ip_hash, parent_id').eq('photo_id', photoId).gte('created_at', startedAt),
   ]);
   const sLikes = (sessionLikesRes.data || []).filter((l) => l.liker_ip_hash !== uploaderIpHash);
-  const sComments = (sessionCommentsRes.data || []).filter((c) => !c.is_op && c.commenter_ip_hash !== uploaderIpHash);
+  // replies (parent_id set) never add display time, only new top-level comments do
+  const sComments = (sessionCommentsRes.data || []).filter((c) => !c.parent_id && !c.is_op && c.commenter_ip_hash !== uploaderIpHash);
   return {
     display: { likes: totalLikes.count || 0, comments: totalComments.count || 0 },
     session: { likes: sLikes.length, comments: sComments.length },
@@ -258,6 +260,9 @@ app.post('/api/upload', uploadLimiter, uploadSingle, wrap(async (req, res) => {
   const requestedName = (req.body.opName || '').toString().trim().slice(0, 20);
   if (containsMaliciousContent(requestedName)) {
     return res.status(400).json({ error: 'Names cannot contain links.' });
+  }
+  if (await isBadIp(clientIp(req))) {
+    return res.status(403).json({ error: 'Uploads are disabled on VPN/proxy connections.' });
   }
   // The name is bound to this IP permanently; whatever was typed is ignored if one already exists.
   const ipHash = hashIp(clientIp(req));
@@ -416,6 +421,11 @@ const requireAdmin = (req, res, next) => {
   if (token) adminSessions.delete(token);
   res.status(401).json({ error: 'Unauthorized.' });
 };
+
+// Open this while logged in to confirm the server sees YOUR real public IP.
+app.get('/api/admin/whoami', requireAdmin, (req, res) => {
+  res.json({ detectedIp: clientIp(req), xForwardedFor: req.headers['x-forwarded-for'] || null, trustProxyHops: app.get('trust proxy') });
+});
 
 app.get('/api/admin/photos', requireAdmin, wrap(async (req, res) => {
   const { data, error } = await supabase.from('photos')
