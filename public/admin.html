@@ -2,139 +2,152 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>THE WALL — Admin Moderation</title>
 <style>
   body { background: #0d0d12; color: #eaeaf0; font-family: sans-serif; padding: 20px; max-width: 900px; margin: 0 auto; }
   input, button { padding: 10px; margin: 5px 0; background: #16161e; color: #fff; border: 1px solid #262633; border-radius: 8px; }
   button { background: #ef476f; cursor: pointer; font-weight: bold; }
-  .photo-card { background: #16161e; border: 1px solid #262633; padding: 15px; margin-bottom: 15px; border-radius: 10px; display: flex; gap: 15px; align-items: center; }
+  .photo-card { background: #16161e; border: 1px solid #262633; padding: 15px; margin-bottom: 15px; border-radius: 10px; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
   .photo-card img { width: 120px; height: 120px; object-fit: cover; border-radius: 6px; background: #000; }
-  .details { flex: 1; }
+  .details { flex: 1; min-width: 180px; word-break: break-word; }
   .status-live { color: #6ee7a0; font-weight: bold; }
   .status-rejected { color: #ef476f; font-weight: bold; }
   .status-pending { color: #ffd166; font-weight: bold; }
-  .dashboard-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+  .status-archived { color: #8a8a9a; font-weight: bold; }
+  .dashboard-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 8px; }
+  .gray { background: #333; font-size: 13px; padding: 8px 14px; }
 </style>
 </head>
 <body>
   <h1>Admin Moderation Panel</h1>
   <div id="loginSection">
     <input type="password" id="passInput" placeholder="Enter Admin Password">
-    <button onclick="login()">Login</button>
+    <button id="loginBtn">Login</button>
   </div>
-  
+
   <div id="dashboard" style="display:none;">
     <div class="dashboard-header">
-      <h2>Photo Queue & Moderation</h2>
-      <button onclick="logout()" style="background:#333; font-size:13px; padding:8px 14px;">Logout</button>
+      <h2>Photo Queue &amp; Moderation</h2>
+      <div>
+        <button class="gray" id="skipBtn">Skip current photo</button>
+        <button class="gray" id="refreshBtn">Refresh</button>
+        <button class="gray" id="logoutBtn">Logout</button>
+      </div>
     </div>
     <div id="photoList">Loading photos…</div>
   </div>
 
 <script>
+const $ = (id) => document.getElementById(id);
 let token = localStorage.getItem('adminToken') || '';
 
-if (token) {
-  document.getElementById('loginSection').style.display = 'none';
-  document.getElementById('dashboard').style.display = 'block';
-  loadPhotos();
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+const PLACEHOLDER = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><rect width='100' height='100' fill='%23333'/><text x='50%' y='50%' fill='%23aaa' dominant-baseline='middle' text-anchor='middle'>No Image</text></svg>";
+
+function showDashboard(on) {
+  $('loginSection').style.display = on ? 'none' : 'block';
+  $('dashboard').style.display = on ? 'block' : 'none';
+}
+
+async function api(url, opts = {}) {
+  const res = await fetch(url, { ...opts, headers: { 'x-admin-token': token, ...(opts.headers || {}) } });
+  if (res.status === 401) { logout(); throw new Error('unauthorized'); }
+  return res;
 }
 
 async function login() {
-  const password = document.getElementById('passInput').value;
-  const res = await fetch('/api/admin/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password })
-  });
-  const data = await res.json();
-  if (res.ok) {
-    token = data.token;
-    localStorage.setItem('adminToken', token);
-    document.getElementById('loginSection').style.display = 'none';
-    document.getElementById('dashboard').style.display = 'block';
-    loadPhotos();
-  } else {
-    alert(data.error);
-  }
+  const password = $('passInput').value;
+  try {
+    const res = await fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      token = data.token;
+      localStorage.setItem('adminToken', token);
+      showDashboard(true);
+      loadPhotos();
+    } else {
+      alert(data.error || 'Login failed.');
+    }
+  } catch (e) { alert('Network error.'); }
 }
 
 function logout() {
   localStorage.removeItem('adminToken');
   token = '';
-  document.getElementById('dashboard').style.display = 'none';
-  document.getElementById('loginSection').style.display = 'block';
-  document.getElementById('passInput').value = '';
+  showDashboard(false);
+  $('passInput').value = '';
 }
 
 async function loadPhotos() {
+  const list = $('photoList');
   try {
-    const res = await fetch('/api/admin/photos', {
-      headers: { 'x-admin-token': token }
-    });
-    
-    if (res.status === 401) {
-      logout();
-      return;
-    }
-
+    const res = await api('/api/admin/photos');
     const photos = await res.json();
-    const list = document.getElementById('photoList');
-    
-    if (!photos.length) {
+    if (!Array.isArray(photos) || !photos.length) {
       list.innerHTML = '<p>No photos found in the database.</p>';
       return;
     }
-
-    list.innerHTML = photos.map(p => {
-      const imgUrl = `https://xktxwljgckpnvkcsjirl.supabase.co/storage/v1/object/public/photos/${p.storage_path}`;
-      return `
-        <div class="photo-card">
-          <img src="${imgUrl}" alt="Photo" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\'><rect width=\'100\' height=\'100\' fill=\'%23333\'/><text x=\'50%\' y=\'50%\' fill=\'%23aaa\' dominant-baseline=\'middle\' text-anchor=\'middle\'>No Image</text></svg>'">
-          <div class="details">
-            <p><b>Status:</b> <span class="status-${p.status}">${p.status}</span></p>
-            <p><b>Caption:</b> ${p.caption || '<i>No caption</i>'}</p>
-            <p><b>Uploader:</b> ${p.op_name || 'Anonymous'}</p>
-            <p><small>Uploaded: ${new Date(p.created_at).toLocaleString()}</small></p>
-          </div>
-          <div>
-            <button onclick="setStatus('${p.id}', 'live')" style="background:#6ee7a0; color:#000;">Approve (Live)</button><br>
-            <button onclick="setStatus('${p.id}', 'rejected')">Reject</button><br>
-            <button onclick="deletePhoto('${p.id}')" style="background:#333; margin-top:5px;">Delete</button>
-          </div>
+    list.innerHTML = photos.map((p) => `
+      <div class="photo-card" data-id="${esc(p.id)}">
+        <img src="${esc(p.url)}" alt="Photo">
+        <div class="details">
+          <p><b>Status:</b> <span class="status-${esc(p.status)}">${esc(p.status)}</span></p>
+          <p><b>Caption:</b> ${p.caption ? esc(p.caption) : '<i>No caption</i>'}</p>
+          <p><b>Uploader:</b> ${esc(p.op_name || 'Anonymous')}</p>
+          <p><small>Uploaded: ${esc(new Date(p.created_at).toLocaleString())}</small></p>
         </div>
-      `;
-    }).join('');
+        <div>
+          <button data-act="live" style="background:#6ee7a0; color:#000;">Approve (Live)</button><br>
+          <button data-act="rejected">Reject</button><br>
+          <button data-act="delete" style="background:#333; margin-top:5px;">Delete</button>
+        </div>
+      </div>`).join('');
+    list.querySelectorAll('img').forEach((img) => { img.onerror = () => { img.onerror = null; img.src = PLACEHOLDER; }; });
   } catch (e) {
-    document.getElementById('photoList').innerHTML = '<p>Error loading photos.</p>';
+    if (e.message !== 'unauthorized') list.innerHTML = '<p>Error loading photos.</p>';
   }
 }
 
 async function setStatus(photoId, status) {
-  const res = await fetch('/api/admin/moderate-photo', {
+  const res = await api('/api/admin/moderate-photo', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-admin-token': token },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ photoId, status })
   });
-  if (res.ok) {
-    loadPhotos();
-  } else {
-    alert('Failed to update photo status.');
-  }
+  res.ok ? loadPhotos() : alert('Failed to update photo status.');
 }
 
 async function deletePhoto(photoId) {
   if (!confirm('Are you sure you want to completely delete this photo?')) return;
-  const res = await fetch('/api/admin/photos/' + photoId, {
-    method: 'DELETE',
-    headers: { 'x-admin-token': token }
-  });
-  if (res.ok) {
-    loadPhotos();
-  } else {
-    alert('Failed to delete photo.');
-  }
+  const res = await api('/api/admin/photos/' + encodeURIComponent(photoId), { method: 'DELETE' });
+  res.ok ? loadPhotos() : alert('Failed to delete photo.');
 }
+
+async function skip() {
+  const res = await api('/api/admin/skip', { method: 'POST' });
+  if (!res.ok) alert('Failed to skip.');
+}
+
+// event delegation (no inline onclick with interpolated ids)
+$('photoList').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const id = btn.closest('.photo-card').dataset.id;
+  if (btn.dataset.act === 'delete') deletePhoto(id);
+  else setStatus(id, btn.dataset.act);
+});
+$('loginBtn').onclick = login;
+$('passInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
+$('logoutBtn').onclick = logout;
+$('refreshBtn').onclick = loadPhotos;
+$('skipBtn').onclick = skip;
+
+if (token) { showDashboard(true); loadPhotos(); }
 </script>
 </body>
 </html>
