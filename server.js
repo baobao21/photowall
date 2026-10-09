@@ -24,7 +24,7 @@ const upload = multer({
 const BASE_SECONDS = 10;      // every photo gets 10 minutes
 const LIKE_MINUTES = 5;       // +5 min per like
 const COMMENT_MINUTES = 10;   // +10 min per comment
-const REPEAT_EXCLUSION_HOURS = 24;
+const REPEAT_EXCLUSION_HOURS = 0;
 
 // ---------- anti-spam & moderation rules ----------
 const COMMENTS_PER_PHOTO_PER_IP = 5;      // max comments one IP can leave on a single photo
