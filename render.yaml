@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: photowall
+    env: node
+    plan: starter          # free tier sleeps; see README for the free workaround
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_BUCKET
+        value: photos
+      - key: IP_SALT
+        sync: false
+      - key: CRON_SECRET
+        sync: false
