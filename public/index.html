@@ -40,7 +40,7 @@
     flex: 1; background: #000; display: flex; align-items: center; justify-content: center;
     min-height: 280px; max-height: 420px;
   }
-  .screen-img-wrap img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .screen-img-wrap img { max-width: 100%; max-height: 420px; width: auto; height: auto; object-fit: contain; display: block; }
   .empty { color: var(--muted); font-size: 14px; padding: 40px 16px; text-align: center; }
   .caption { padding: 12px 16px; font-size: 14px; color: var(--text); border-top: 1px solid var(--border); word-break: break-word; }
   .caption .op-tag {
@@ -142,7 +142,6 @@
   .pulse { animation: pulse .5s ease; }
   @keyframes pulse { 50% { transform: scale(1.08); } }
 </style>
-<base target="_blank">
 </head>
 <body>
 
@@ -193,7 +192,7 @@
       <img class="preview" id="preview" alt="">
     </label>
     <div class="u-row">
-      <input id="nameInput" maxlength="20" placeholder="Your name (leave blank to auto-lock)">
+      <input id="nameInput" maxlength="20" placeholder="Your name (blank = random name)">
       <input id="captionInput" maxlength="280" placeholder="Optional caption (280 chars)">
       <button id="uploadBtn">Upload</button>
     </div>
@@ -211,6 +210,7 @@ const $ = (id) => document.getElementById(id);
 let state = { photo: null, remainingSeconds: 0, engagement: { likes: 0, comments: 0 } };
 let liked = JSON.parse(localStorage.getItem('liked') || '{}');
 let lastSeenSeconds = null;
+let lastCommentCount = null;
 
 const fmt = (s) => {
   s = Math.max(0, s);
@@ -240,6 +240,7 @@ function renderCommentTree(list) {
   return parents.map(p => {
     const pBadge = p.is_op ? '<span class="op-badge">★ OP</span><span class="c-name">' + escapeHtml(p.author_name || 'Anonymous') + '</span>' : '<span class="c-name">' + escapeHtml(p.author_name || 'Anonymous') + '</span>';
     
+    // Find children replies
     const childReplies = replies.filter(r => r.parent_id === p.id);
     const repliesHtml = childReplies.length > 0 ? `<div class="reply-list">` + childReplies.map(r => {
       const rBadge = r.is_op ? '<span class="op-badge">★ OP</span><span class="c-name">' + escapeHtml(r.author_name || 'Anonymous') + '</span>' : '<span class="c-name">' + escapeHtml(r.author_name || 'Anonymous') + '</span>';
@@ -262,13 +263,12 @@ function renderCommentTree(list) {
 }
 
 function toggleReplyBox(commentId) {
-  const box = document.getElementById(`reply-box-${commentId}`);
-  if (box) box.style.display = box.style.display === 'none' ? 'flex' : 'none';
+  const box = $(`reply-box-${commentId}`);
+  box.style.display = box.style.display === 'none' ? 'flex' : 'none';
 }
 
 async function submitReply(parentId) {
-  const input = document.getElementById(`reply-input-${parentId}`);
-  if (!input) return;
+  const input = $(`reply-input-${parentId}`);
   const body = input.value.trim();
   if (!body || !state.photo) return;
   
@@ -287,7 +287,7 @@ async function submitReply(parentId) {
     } else {
       alert(data.error || 'Failed to post reply.');
     }
-  } catch (e) {}
+  } catch (e) { alert('Network error.'); }
 }
 
 async function refresh() {
@@ -304,12 +304,14 @@ async function refresh() {
         const img = document.createElement('img');
         img.src = data.photo.url;
         img.alt = data.photo.caption || 'photo';
+        img.onerror = () => { $('imgWrap').innerHTML = '<div class="empty">Image failed to load.<br>(Is the Supabase bucket public?)</div>'; };
         $('imgWrap').appendChild(img);
         const cap = $('caption');
         cap.style.display = data.photo.caption || data.photo.opName ? 'block' : 'none';
         cap.innerHTML = (data.photo.opName ? '<span class="op-tag">by ' + escapeHtml(data.photo.opName) + '</span>' : '')
                       + escapeHtml(data.photo.caption || '');
         loadComments(newPhotoId);
+        lastCommentCount = data.engagement.comments;
         $('cmsg').textContent = '';
       } else {
         $('imgWrap').innerHTML = '<div class="empty">Waiting for the next photo…</div>';
@@ -317,6 +319,10 @@ async function refresh() {
       }
     }
 
+    if (newPhotoId && newPhotoId === oldPhotoId && data.engagement.comments !== lastCommentCount) {
+      lastCommentCount = data.engagement.comments;
+      loadComments(newPhotoId);
+    }
     $('likeCount').textContent = data.engagement.likes;
     $('commentCount').textContent = data.engagement.comments;
 
@@ -340,11 +346,12 @@ async function loadComments(photoId) {
   } catch (e) {}
 }
 
+// Countdown timer interval
 setInterval(() => {
   if (!state.photo) { $('timer').textContent = '--:--';$('bar').style.width = '0%'; return; }
   if (state.remainingSeconds > 0) state.remainingSeconds--;
   $('timer').textContent = fmt(state.remainingSeconds);
-  $('timer').className = 'timer' + (state.remainingSeconds === 0 ? ' dead' : state.remainingSeconds < 30 ? ' warn' : '');$('bar').style.width = Math.min(100, (state.remainingSeconds / 60) * 100) + '%';
+  $('timer').className = 'timer' + (state.remainingSeconds === 0 ? ' dead' : state.remainingSeconds < 30 ? ' warn' : '');$('bar').style.width = Math.min(100, (state.remainingSeconds / (state.totalSeconds || 15)) * 100) + '%';
   if (state.remainingSeconds === 0) $('timer').textContent = 'NEXT…';
 }, 1000);
 
@@ -387,13 +394,14 @@ $('cform').onsubmit = async (e) => {
       refresh();
       loadComments(state.photo.id);
     } else {
-      $('cmsg').textContent = data.error \vert{}\vert{} 'Comment failed.';$('cmsg').className = 'c-msg err';
+      $('cmsg').textContent = data.error || 'Comment failed.';$('cmsg').className = 'c-msg err';
     }
   } catch (e) {}
 };
 
+// Upload logic
 let pickedFile = null;
-const drop = $('drop'), fileInput = document.getElementById('file');
+const drop = $('drop'), fileInput =$('file');
 
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
@@ -401,9 +409,7 @@ drop.addEventListener('drop', (e) => {
   e.preventDefault(); drop.classList.remove('over');
   if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]);
 });
-fileInput.addEventListener('change', () => {
-  if (fileInput.files[0]) pickFile(fileInput.files[0]);
-});
+fileInput.addEventListener('change', () => fileInput.files[0] && pickFile(fileInput.files[0]));
 
 function pickFile(f) {
   if (f.size > 8 * 1024 * 1024) return umsg('File too big (max 8 MB).', false);
@@ -429,10 +435,10 @@ $('uploadBtn').onclick = async () => {
   fd.append('opName', $('nameInput').value);
   try {
     const res = await fetch('/api/upload', { method: 'POST', body: fd });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (res.ok) {
       saveMyPhoto(data.id, data.opName, data.opToken);
-      umsg(`Uploaded successfully as "${data.opName}"!`, true);
+      umsg(data.status === 'pending' ? `Uploaded as "${data.opName}" — waiting for admin approval.` : `Uploaded as "${data.opName}"! It's in the queue.`, true);
       pickedFile = null; fileInput.value = '';
       $('preview').style.display = 'none';$('dropText').textContent = 'Click or drop a photo here (max 8 MB)';
       $('captionInput').value = '';$('nameInput').value = '';
