@@ -21,7 +21,7 @@ const upload = multer({
   limits: { fileSize: 8 * 1024 * 1024, files: 1 },
 });
 
-const BASE_SECONDS = 10;      // every photo gets 10 minutes
+const BASE_SECONDS = 15;      // every photo gets 10 minutes
 const LIKE_MINUTES = 5;       // +5 min per like
 const COMMENT_MINUTES = 10;   // +10 min per comment
 const REPEAT_EXCLUSION_HOURS = 0;
