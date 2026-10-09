@@ -215,6 +215,9 @@ app.post('/api/upload', uploadLimiter, upload.single('photo'), async (req, res) 
     }
 
     const caption = (req.body.caption || '').toString().slice(0, 280);
+    if (containsMaliciousContent(caption)) {
+    return res.status(400).json({ error: 'Captions cannot contain links or promotional URLs.' });
+    }
     const requestedName = (req.body.opName || '').toString().trim().slice(0, 20);
     const opName = requestedName || generateName();   // every uploader gets a name
     const opToken = crypto.randomUUID();              // secret token proving "I uploaded this"
@@ -282,6 +285,9 @@ app.post('/api/like', likeLimiter, async (req, res) => {
 app.post('/api/comments', commentLimiter, async (req, res) => {
   const { photoId, body, opToken } = req.body || {};
   const text = (body || '').toString().trim().slice(0, 500);
+  if (containsMaliciousContent(text)) {
+  return res.status(400).json({ error: 'Comments cannot contain links or external URLs.' });
+}
   if (!photoId || !text) {
     return res.status(400).json({ error: 'photoId and a comment body are required.' });
   }
