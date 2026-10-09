@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Your profile — THE WALL</title>
+<style>
+  :root { --bg:#0d0d12; --panel:#16161e; --panel2:#1c1c26; --text:#eaeaf0; --muted:#8a8a9a; --accent:#ffd166; --accent2:#ef476f; --border:#262633; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; min-height:100vh; }
+  header { display:flex; justify-content:space-between; align-items:center; padding:14px 20px; border-bottom:1px solid var(--border); flex-wrap:wrap; gap:8px; }
+  .logo { font-weight:800; font-size:18px; letter-spacing:2px; color:var(--text); text-decoration:none; }
+  .logo span { color:var(--accent); }
+  .btn { background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:8px 14px; font-size:13px; font-weight:700; cursor:pointer; text-decoration:none; display:inline-block; }
+  .btn.primary { background:var(--accent2); border-color:var(--accent2); color:#fff; }
+  .btn.danger { color:var(--accent2); }
+  main { max-width:900px; margin:0 auto; padding:20px 14px 50px; display:flex; flex-direction:column; gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:18px; }
+  h1 { font-size:22px; } h2 { font-size:15px; margin-bottom:12px; }
+  .muted { color:var(--muted); font-size:13px; margin-top:4px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:14px; }
+  .item { background:var(--panel2); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
+  .item img { width:100%; height:160px; object-fit:cover; background:#000; }
+  .item .info { padding:10px; font-size:13px; display:flex; flex-direction:column; gap:6px; flex:1; }
+  .item small { color:var(--muted); word-break:break-word; }
+  .st { font-weight:800; font-size:12px; }
+  .st-live { color:#6ee7a0; } .st-pending { color:var(--accent); } .st-rejected { color:var(--accent2); } .st-archived { color:var(--muted); }
+  .warn { background:#2a1d22; border:1px solid var(--accent2); color:#ffb3c4; border-radius:10px; padding:10px 12px; font-size:13px; }
+  form { display:flex; flex-direction:column; gap:10px; max-width:360px; }
+  input { background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:11px 12px; color:var(--text); font-size:14px; outline:none; }
+  input:focus { border-color:var(--accent); }
+  .msg { font-size:12px; min-height:16px; } .msg.ok { color:#6ee7a0; } .msg.err { color:var(--accent2); }
+  .empty { color:var(--muted); font-size:14px; padding:16px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/">THE<span>WALL</span></a>
+  <div><a class="btn" href="/">← Back to the wall</a> <button class="btn" id="logoutBtn" style="display:none">Log out</button></div>
+</header>
+
+<main id="app">
+  <div class="empty">Loading…</div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (m) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+let auth = null;
+try { auth = JSON.parse(localStorage.getItem('auth') || 'null'); } catch (e) {}
+const headers = (extra) => ({ ...(auth ? { Authorization: 'Bearer ' + auth.token } : {}), ...(extra || {}) });
+const LABEL = { live: 'Live on the wall ✓', pending: 'Waiting for approval', rejected: 'Rejected', archived: 'Archived' };
+
+function logout() { localStorage.removeItem('auth'); location.href = '/'; }
+$('logoutBtn').onclick = logout;
+
+async function load() {
+  const app = $('app');
+  if (!auth) {
+    app.innerHTML = '<div class="card empty">You\'re not signed in.<br><br><a class="btn primary" href="/">Go to the wall to sign in</a></div>';
+    return;
+  }
+  $('logoutBtn').style.display = 'inline-block';
+  try {
+    const res = await fetch('/api/me', { headers: headers() });
+    if (res.status === 401) { localStorage.removeItem('auth'); auth = null; return load(); }
+    const me = await res.json();
+    render(me);
+  } catch (e) { app.innerHTML = '<div class="card empty">Could not load your profile. Try again.</div>'; }
+}
+
+function render(me) {
+  const photos = me.photos || [];
+  const items = photos.map((p) => `
+    <div class="item" data-id="${esc(p.id)}">
+      <img src="${esc(p.url)}" alt="">
+      <div class="info">
+        <span class="st st-${esc(p.status)}">${esc(LABEL[p.status] || p.status)}</span>
+        <small>${esc(p.caption || 'No caption')}</small>
+        <small>${esc(new Date(p.created_at).toLocaleString())}</small>
+        <button class="btn danger" data-del="1" style="margin-top:auto">Delete</button>
+      </div>
+    </div>`).join('');
+
+  $('app').innerHTML = `
+    <div class="card">
+      <h1>👤 ${esc(me.username)}</h1>
+      <div class="muted">${esc(me.email || '')}</div>
+      ${me.ipMatches ? '' : '<div class="warn" style="margin-top:12px">⚠ Your account is locked to a different internet connection, so uploads are blocked from here. Ask the admin to reset your IP lock.</div>'}
+    </div>
+
+    <div class="card">
+      <h2>Your uploads (${photos.length})</h2>
+      ${photos.length ? '<div class="grid">' + items + '</div>' : '<div class="empty">You haven\'t uploaded anything yet.<br><br><a class="btn primary" href="/">Upload a photo</a></div>'}
+      <div class="msg" id="pmsg"></div>
+    </div>
+
+    <div class="card">
+      <h2>Change password</h2>
+      <form id="pwForm">
+        <input type="password" id="curPw" placeholder="Current password" autocomplete="current-password" required>
+        <input type="password" id="newPw" placeholder="New password (min 8 characters)" autocomplete="new-password" required minlength="8">
+        <button class="btn primary" type="submit">Update password</button>
+        <div class="msg" id="pwMsg"></div>
+      </form>
+    </div>`;
+
+  document.querySelector('.grid')?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-del]');
+    if (!btn) return;
+    if (!confirm('Delete this photo permanently?')) return;
+    const id = btn.closest('.item').dataset.id;
+    const res = await fetch('/api/me/photos/' + encodeURIComponent(id), { method: 'DELETE', headers: headers() });
+    if (res.ok) load(); else { $('pmsg').className = 'msg err'; $('pmsg').textContent = 'Could not delete the photo.'; }
+  });
+
+  $('pwForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const msg = $('pwMsg');
+    msg.className = 'msg ok'; msg.textContent = 'Please wait…';
+    try {
+      const res = await fetch('/api/me/password', {
+        method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ current: $('curPw').value, password: $('newPw').value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) { msg.textContent = 'Password updated.'; $('pwForm').reset(); }
+      else { msg.className = 'msg err'; msg.textContent = data.error || 'Failed to update password.'; }
+    } catch (err) { msg.className = 'msg err'; msg.textContent = 'Network error.'; }
+  };
+}
+
+load();
+</script>
+</body>
+</html>
