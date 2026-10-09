@@ -106,11 +106,12 @@ async function getCurrentDisplay() {
 }
 
 async function pickNextPhoto() {
-  // Prefer unseen-in-24h photos; fall back to allowing repeats rather than a blank screen.
-  const { data } = await supabase.rpc('pick_next_photo', { excl_hours: REPEAT_EXCLUSION_HOURS });
-  if (data) return data;
-  const { data: any } = await supabase.rpc('pick_next_photo', { excl_hours: 0 });
-  return any || null;
+  const get = async (hours) => {
+    const { data } = await supabase.rpc('pick_next_photo', { excl_hours: hours });
+    // rpc returns an ARRAY for setof functions — take the first row
+    return Array.isArray(data) ? data[0] : data;
+  };
+  return (await get(REPEAT_EXCLUSION_HOURS)) || (await get(0));
 }
 
 // The heart of the app. Runs every 30s: if the current photo's time is up
