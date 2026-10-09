@@ -121,8 +121,8 @@ async function tick() {
     const current = await getCurrentDisplay();
     if (current && current.remainingSeconds > 0) return;
 
-    const next = await pickNextPhoto();
-    if (!next) {
+        const next = await pickNextPhoto();
+    if (!next || !next.id) {
       console.log('[tick] queue is empty — nothing to show');
       return;
     }
