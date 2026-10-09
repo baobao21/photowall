@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reset password — THE WALL</title>
+<style>
+  :root { --bg:#0d0d12; --panel:#16161e; --panel2:#1c1c26; --text:#eaeaf0; --muted:#8a8a9a; --accent:#ffd166; --accent2:#ef476f; --border:#262633; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:24px; width:100%; max-width:380px; display:flex; flex-direction:column; gap:12px; }
+  h1 { font-size:20px; } p { color:var(--muted); font-size:13px; line-height:1.5; }
+  input { background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:12px; color:var(--text); font-size:14px; outline:none; }
+  input:focus { border-color:var(--accent); }
+  button, a.btn { background:var(--accent2); border:none; color:#fff; border-radius:10px; padding:12px; font-weight:700; cursor:pointer; text-align:center; text-decoration:none; font-size:14px; }
+  .msg { font-size:13px; min-height:16px; } .msg.ok { color:#6ee7a0; } .msg.err { color:var(--accent2); }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Choose a new password</h1>
+  <div id="body"></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+const query = new URLSearchParams(location.search);
+const token = hash.get('access_token');
+const err = hash.get('error_description') || query.get('error_description');
+history.replaceState(null, '', location.pathname); // don't leave the token in the address bar
+
+if (!token || hash.get('type') !== 'recovery') {
+  $('body').innerHTML = '<p>' + (err ? 'This reset link is invalid or has expired.' : 'This page only works from the link in a password-reset email.') +
+    '</p><br><a class="btn" href="/" style="display:block">Back to the wall</a><p style="margin-top:10px">Use <b>Sign in → Forgot password?</b> to request a new link.</p>';
+} else {
+  $('body').innerHTML = `
+    <p>Enter a new password for your account (8–72 characters).</p>
+    <form id="f" style="display:flex;flex-direction:column;gap:12px;margin-top:6px">
+      <input type="password" id="pw1" placeholder="New password" autocomplete="new-password" minlength="8" maxlength="72" required>
+      <input type="password" id="pw2" placeholder="Repeat new password" autocomplete="new-password" minlength="8" maxlength="72" required>
+      <button type="submit">Set new password</button>
+      <div class="msg" id="msg"></div>
+    </form>`;
+  $('f').onsubmit = async (e) => {
+    e.preventDefault();
+    const m = $('msg');
+    if ($('pw1').value !== $('pw2').value) { m.className = 'msg err'; m.textContent = 'Passwords don\'t match.'; return; }
+    m.className = 'msg ok'; m.textContent = 'Please wait…';
+    try {
+      const res = await fetch('/api/auth/reset', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, password: $('pw1').value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        localStorage.removeItem('auth');
+        $('body').innerHTML = '<p style="color:#6ee7a0;font-size:14px">Password updated! You can now sign in with your new password.</p><br><a class="btn" href="/" style="display:block">Go to the wall</a>';
+      } else { m.className = 'msg err'; m.textContent = data.error || 'Could not reset the password.'; }
+    } catch (x) { m.className = 'msg err'; m.textContent = 'Network error. Try again.'; }
+  };
+}
+</script>
+</body>
+</html>
