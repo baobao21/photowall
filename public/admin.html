@@ -36,6 +36,9 @@
       </div>
     </div>
     <div id="photoList">Loading photos…</div>
+    <h2 style="margin-top:30px">Users</h2>
+    <p style="color:#8a8a9a;font-size:13px">Each account is locked to one connection (IP). "Reset IP lock" lets a user re-bind to their new connection on their next upload.</p>
+    <div id="userList">Loading users…</div>
   </div>
 
 <script>
@@ -70,6 +73,7 @@ async function login() {
       localStorage.setItem('adminToken', token);
       showDashboard(true);
       loadPhotos();
+      loadUsers();
     } else {
       alert(data.error || 'Login failed.');
     }
@@ -113,6 +117,44 @@ async function loadPhotos() {
   }
 }
 
+async function loadUsers() {
+  const list = $('userList');
+  try {
+    const res = await api('/api/admin/profiles');
+    const users = await res.json();
+    if (!Array.isArray(users) || !users.length) { list.innerHTML = '<p>No registered users yet.</p>'; return; }
+    list.innerHTML = users.map((u) => `
+      <div class="photo-card" data-uid="${esc(u.user_id)}">
+        <div class="details">
+          <p><b>${esc(u.username)}</b> — ${u.locked ? '🔒 IP locked' : '🔓 unlocked (binds on next upload)'}</p>
+          <p><small>Joined: ${esc(new Date(u.created_at).toLocaleString())}</small></p>
+        </div>
+        <div>
+          <button data-uact="reset" class="gray">Reset IP lock</button>
+          <button data-uact="ban">Delete account</button>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    if (e.message !== 'unauthorized') list.innerHTML = '<p>Error loading users.</p>';
+  }
+}
+
+$('userList').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-uact]');
+  if (!btn) return;
+  const uid = btn.closest('.photo-card').dataset.uid;
+  try {
+    if (btn.dataset.uact === 'reset') {
+      const res = await api('/api/admin/profiles/' + encodeURIComponent(uid) + '/reset-ip', { method: 'POST' });
+      res.ok ? loadUsers() : alert('Failed to reset.');
+    } else {
+      if (!confirm('Delete this account permanently? Their photos stay but are detached from it.')) return;
+      const res = await api('/api/admin/profiles/' + encodeURIComponent(uid), { method: 'DELETE' });
+      res.ok ? loadUsers() : alert('Failed to delete user.');
+    }
+  } catch (err) {}
+});
+
 async function setStatus(photoId, status) {
   const res = await api('/api/admin/moderate-photo', {
     method: 'POST',
@@ -144,10 +186,10 @@ $('photoList').addEventListener('click', (e) => {
 $('loginBtn').onclick = login;
 $('passInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
 $('logoutBtn').onclick = logout;
-$('refreshBtn').onclick = loadPhotos;
+$('refreshBtn').onclick = () => { loadPhotos(); loadUsers(); };
 $('skipBtn').onclick = skip;
 
-if (token) { showDashboard(true); loadPhotos(); }
+if (token) { showDashboard(true); loadPhotos(); loadUsers(); }
 </script>
 </body>
 </html>
