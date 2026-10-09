@@ -26,12 +26,25 @@ const LIKE_MINUTES = 5;       // +5 min per like
 const COMMENT_MINUTES = 10;   // +10 min per comment
 const REPEAT_EXCLUSION_HOURS = 24;
 
+// ---------- anti-spam rules ----------
+const COMMENTS_PER_PHOTO_PER_IP = 5;      // max comments one IP can leave on a single photo
+const COMMENTS_PER_DAY_PER_IP = 40;       // global daily comment cap per IP
+const COMMENT_COOLDOWN_SECONDS = 15;      // min seconds between comments from one IP
+const LIKES_PER_DAY_PER_IP = 100;         // global daily like cap per IP
+const VPN_CACHE_HOURS = 24;               // how long we remember an IP's VPN check
+
 const ALLOWED_MIME = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
   'image/gif': 'gif',
 };
+
+// Fun anonymous name generator for uploaders who don't pick a name
+const ADJ = ['Swift', 'Clever', 'Sleepy', 'Bold', 'Cosmic', 'Mellow', 'Hyper', 'Quiet', 'Lucky', 'Grumpy', 'Neon', 'Ancient', 'Sneaky', 'Turbo', 'Frosty', 'Golden'];
+const NOUN = ['Fox', 'Otter', 'Raccoon', 'Panda', 'Falcon', 'Wolf', 'Lynx', 'Badger', 'Crane', 'Moose', 'Viper', 'Badger', 'Heron', 'Bison', 'Eagle', 'Sphinx'];
+const generateName = () =>
+  `${ADJ[crypto.randomInt(ADJ.length)]} ${NOUN[crypto.randomInt(NOUN.length)]} ${crypto.randomInt(1000, 9999)}`;
 
 // IPs are stored only as salted hashes — we can dedupe, but a leak can't identify anyone.
 const IP_SALT = process.env.IP_SALT || crypto.randomBytes(32).toString('hex');
@@ -44,8 +57,42 @@ const clientIp = (req) =>
 const hashIp = (ip) =>
   crypto.createHash('sha256').update(`${ip}:${IP_SALT}`).digest('hex');
 
+// ---------- VPN / proxy detection ----------
+// Uses proxycheck.io free API (get a key at proxycheck.io, ~100 checks/day free).
+// If VPNCHECK_API_KEY is not set, the check is skipped and only behavioral rules apply.
+// Results are cached per IP for 24h so you don't burn your daily quota.
+const vpnCache = new Map(); // ipHash -> { bad: boolean, at: number }
+
+async function isBadIp(ip) {
+  if (!process.env.VPNCHECK_API_KEY) return false;
+  const key = hashIp(ip);
+  const cached = vpnCache.get(key);
+  if (cached && Date.now() - cached.at < VPN_CACHE_HOURS * 3600 * 1000) return cached.bad;
+
+  let bad = false;
+  try {
+    const res = await fetch(
+      `https://proxycheck.io/v2/${encodeURIComponent(ip)}?key=${process.env.VPNCHECK_API_KEY}&vpn=3&risk=2&asn=1`,
+      { signal: AbortSignal.timeout(4000) }
+    );
+    const data = await res.json();
+    const info = data?.[ip];
+    bad = !!info && (
+      info.proxy === 'yes' ||
+      info.type === 'VPN' ||
+      info.type === 'TOR' ||
+      (parseInt(info.risk, 10) || 0) >= 80
+    );
+  } catch {
+    bad = false; // fail-open: if the check service is down, don't block real users
+  }
+  vpnCache.set(key, { bad, at: Date.now() });
+  if (bad) console.log(`[vpn-check] blocked ${ip} (vpn/proxy/tor)`);
+  return bad;
+}
+
 // ---------- middleware ----------
-app.set('trust proxy', 1); // Render sits behind a proxy
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '20kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -85,7 +132,7 @@ async function getCurrentDisplay() {
   if (!state?.photo_id) return null;
 
   const { data: photo } = await supabase
-    .from('photos').select('id, caption, storage_path, created_at')
+    .from('photos').select('id, caption, storage_path, op_name, created_at')
     .eq('id', state.photo_id).single();
   if (!photo) return null;
 
@@ -97,6 +144,7 @@ async function getCurrentDisplay() {
       id: photo.id,
       caption: photo.caption,
       url: url.publicUrl,
+      opName: photo.op_name,
       uploadedAt: photo.created_at,
     },
     engagement,
@@ -121,7 +169,7 @@ async function tick() {
     const current = await getCurrentDisplay();
     if (current && current.remainingSeconds > 0) return;
 
-        const next = await pickNextPhoto();
+    const next = await pickNextPhoto();
     if (!next || !next.id) {
       console.log('[tick] queue is empty — nothing to show');
       return;
@@ -167,8 +215,11 @@ app.post('/api/upload', uploadLimiter, upload.single('photo'), async (req, res) 
     }
 
     const caption = (req.body.caption || '').toString().slice(0, 280);
-    const storagePath = `uploads/${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
+    const requestedName = (req.body.opName || '').toString().trim().slice(0, 20);
+    const opName = requestedName || generateName();   // every uploader gets a name
+    const opToken = crypto.randomUUID();              // secret token proving "I uploaded this"
 
+    const storagePath = `uploads/${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
     const { error: upErr } = await supabase.storage
       .from(BUCKET)
       .upload(storagePath, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
@@ -178,6 +229,8 @@ app.post('/api/upload', uploadLimiter, upload.single('photo'), async (req, res) 
       .insert({
         storage_path: storagePath,
         caption,
+        op_name: opName,
+        op_token: opToken,
         uploader_ip_hash: hashIp(clientIp(req)),
         status: 'pending',
       })
@@ -185,7 +238,8 @@ app.post('/api/upload', uploadLimiter, upload.single('photo'), async (req, res) 
       .single();
     if (dbErr) throw dbErr;
 
-    res.json({ ok: true, id: photo.id });
+    // opToken is returned ONCE — the browser saves it to claim the OP badge later
+    res.json({ ok: true, id: photo.id, opName, opToken });
   } catch (err) {
     console.error('[upload]', err);
     res.status(500).json({ error: 'Upload failed. Please try again.' });
@@ -196,8 +250,24 @@ app.post('/api/like', likeLimiter, async (req, res) => {
   const photoId = req.body?.photoId;
   if (!photoId) return res.status(400).json({ error: 'photoId is required.' });
 
+  const ipHash = hashIp(clientIp(req));
+
+  if (await isBadIp(clientIp(req))) {
+    return res.status(403).json({ error: 'Likes are disabled on VPN/proxy connections.' });
+  }
+
+  // daily like cap per IP
+  const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const { count: likesToday } = await supabase.from('likes')
+    .select('*', { count: 'exact', head: true })
+    .eq('liker_ip_hash', ipHash)
+    .gte('created_at', dayAgo);
+  if ((likesToday || 0) >= LIKES_PER_DAY_PER_IP) {
+    return res.status(429).json({ error: 'Daily like limit reached. Come back tomorrow.' });
+  }
+
   const { error } = await supabase.from('likes')
-    .insert({ photo_id: photoId, liker_ip_hash: hashIp(clientIp(req)) });
+    .insert({ photo_id: photoId, liker_ip_hash: ipHash });
 
   if (error) {
     if (error.code === '23505') {
@@ -210,25 +280,74 @@ app.post('/api/like', likeLimiter, async (req, res) => {
 });
 
 app.post('/api/comments', commentLimiter, async (req, res) => {
-  const { photoId, body } = req.body || {};
+  const { photoId, body, opToken } = req.body || {};
   const text = (body || '').toString().trim().slice(0, 500);
   if (!photoId || !text) {
     return res.status(400).json({ error: 'photoId and a comment body are required.' });
   }
 
-  const { error } = await supabase.from('comments')
-    .insert({ photo_id: photoId, commenter_ip_hash: hashIp(clientIp(req)), body: text });
+  const ip = clientIp(req);
+  const ipHash = hashIp(ip);
+
+  // Rule 0: VPN / proxy / Tor check
+  if (await isBadIp(ip)) {
+    return res.status(403).json({ error: 'Comments are disabled on VPN/proxy connections.' });
+  }
+
+  // Rule 1: cooldown — one comment per IP every N seconds
+  const { data: lastComment } = await supabase.from('comments')
+    .select('created_at').eq('commenter_ip_hash', ipHash)
+    .order('created_at', { ascending: false })
+    .limit(1).maybeSingle();
+  if (lastComment && Date.now() - new Date(lastComment.created_at).getTime() < COMMENT_COOLDOWN_SECONDS * 1000) {
+    return res.status(429).json({ error: `Please wait ${COMMENT_COOLDOWN_SECONDS} seconds between comments.` });
+  }
+
+  // Rule 2: max comments per photo per IP
+  const { count: onPhoto } = await supabase.from('comments')
+    .select('*', { count: 'exact', head: true })
+    .eq('photo_id', photoId).eq('commenter_ip_hash', ipHash);
+  if ((onPhoto || 0) >= COMMENTS_PER_PHOTO_PER_IP) {
+    return res.status(429).json({ error: `Max ${COMMENTS_PER_PHOTO_PER_IP} comments per photo.` });
+  }
+
+  // Rule 3: global daily cap per IP
+  const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const { count: today } = await supabase.from('comments')
+    .select('*', { count: 'exact', head: true })
+    .eq('commenter_ip_hash', ipHash)
+    .gte('created_at', dayAgo);
+  if ((today || 0) >= COMMENTS_PER_DAY_PER_IP) {
+    return res.status(429).json({ error: 'Daily comment limit reached. Come back tomorrow.' });
+  }
+
+  // OP verification: does the supplied token match this photo's uploader token?
+  let authorName = null;
+  let isOp = false;
+  if (opToken) {
+    const { data: photo } = await supabase.from('photos')
+      .select('op_token, op_name').eq('id', photoId).maybeSingle();
+    if (photo?.op_token && photo.op_token === opToken) {
+      isOp = true;
+      authorName = photo.op_name;
+    }
+  }
+
+  const { data: comment, error } = await supabase.from('comments')
+    .insert({ photo_id: photoId, commenter_ip_hash: ipHash, body: text, author_name: authorName, is_op: isOp })
+    .select('id, body, author_name, is_op, created_at')
+    .single();
 
   if (error) {
     console.error('[comment]', error);
     return res.status(500).json({ error: 'Comment failed.' });
   }
-  res.json({ ok: true });
+  res.json(comment);
 });
 
 app.get('/api/photos/:id/comments', async (req, res) => {
   const { data, error } = await supabase.from('comments')
-    .select('id, body, created_at')
+    .select('id, body, author_name, is_op, created_at')
     .eq('photo_id', req.params.id)
     .order('created_at', { ascending: false })
     .limit(100);
