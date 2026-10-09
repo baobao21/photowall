@@ -21,7 +21,7 @@ const upload = multer({
   limits: { fileSize: 8 * 1024 * 1024, files: 1 },
 });
 
-const BASE_MINUTES = 10;      // every photo gets 10 minutes
+const BASE_SECONDS = 10;      // every photo gets 10 minutes
 const LIKE_MINUTES = 5;       // +5 min per like
 const COMMENT_MINUTES = 10;   // +10 min per comment
 const REPEAT_EXCLUSION_HOURS = 24;
@@ -125,7 +125,7 @@ async function getEngagement(photoId) {
 }
 
 function remainingSeconds(startedAt, engagement) {
-  const baseEnd = new Date(startedAt).getTime() + BASE_MINUTES * 60 * 1000;
+  const baseEnd = new Date(startedAt).getTime() + BASE_SECONDS * 60 * 1000;
   const bonus = (engagement.likes * LIKE_MINUTES + engagement.comments * COMMENT_MINUTES) * 60 * 1000;
   return Math.max(0, Math.round((baseEnd + bonus - Date.now()) / 1000));
 }
