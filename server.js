@@ -21,7 +21,7 @@ const upload = multer({
   limits: { fileSize: 8 * 1024 * 1024, files: 1 },
 });
 
-const BASE_SECONDS = 15;      // every photo gets 10 minutes
+const BASE_SECONDS = 15;      // base display duration in seconds
 const LIKE_MINUTES = 5;       // +5 min per like
 const COMMENT_MINUTES = 10;   // +10 min per comment
 const REPEAT_EXCLUSION_HOURS = 0;
@@ -116,10 +116,10 @@ const likeLimiter = rateLimit({
 });
 
 // ---------- display logic ----------
-async function getEngagement(photoId) {
+async function getEngagement(photoId, startedAt) {
   const [l, c] = await Promise.all([
-    supabase.from('likes').select('*', { count: 'exact', head: true }).eq('photo_id', photoId),
-    supabase.from('comments').select('*', { count: 'exact', head: true }).eq('photo_id', photoId),
+    supabase.from('likes').select('*', { count: 'exact', head: true }).eq('photo_id', photoId).gte('created_at', startedAt),
+    supabase.from('comments').select('*', { count: 'exact', head: true }).eq('photo_id', photoId).gte('created_at', startedAt),
   ]);
   return { likes: l.count || 0, comments: c.count || 0 };
 }
@@ -140,7 +140,7 @@ async function getCurrentDisplay() {
     .eq('id', state.photo_id).single();
   if (!photo) return null;
 
-  const engagement = await getEngagement(photo.id);
+  const engagement = await getEngagement(photo.id, state.started_at);
   const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(photo.storage_path);
 
   return {
@@ -433,6 +433,23 @@ app.delete('/api/admin/photos/:id', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Force skip current photo (Admin)
+app.post('/api/admin/skip', requireAdmin, async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('display_state')
+      .update({ started_at: new Date(0).toISOString() })
+      .eq('id', 1);
+    
+    if (error) throw error;
+    await tick();
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[skip]', err);
+    res.status(500).json({ error: 'Failed to skip photo.' });
+  }
+});
+
 app.delete('/api/admin/comments/:id', requireAdmin, async (req, res) => {
   const { error } = await supabase
     .from('comments')
@@ -443,5 +460,6 @@ app.delete('/api/admin/comments/:id', requireAdmin, async (req, res) => {
 });
 
 // ---------- go ----------
+tick();
 setInterval(tick, 5 * 1000);
 app.listen(PORT, () => console.log(`photowall running on :${PORT}`));
