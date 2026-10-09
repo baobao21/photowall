@@ -57,7 +57,7 @@ const clientIp = (req) =>
 const hashIp = (ip) =>
   crypto.createHash('sha256').update(`${ip}:${IP_SALT}`).digest('hex');
 
-// --- Malicious link & spam blocker function (Moved to top so it's defined before use) ---
+// --- Malicious link & spam blocker function ---
 function containsMaliciousContent(text) {
   if (!text) return false;
   const urlRegex = /(https?:\/\/|www\.|[a-zA-Z0-9-]+\.(com|net|org|ru|xyz|top|cn|info|tk))/i;
@@ -409,6 +409,27 @@ app.post('/api/admin/moderate-photo', requireAdmin, async (req, res) => {
     .update({ status })
     .eq('id', photoId);
   if (error) return res.status(500).json({ error: 'Moderation failed.' });
+  res.json({ ok: true });
+});
+
+// Edit photo caption (Admin)
+app.put('/api/admin/photos/:id', requireAdmin, async (req, res) => {
+  const { caption } = req.body;
+  const { error } = await supabase
+    .from('photos')
+    .update({ caption: (caption || '').toString().slice(0, 280) })
+    .eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: 'Failed to update caption.' });
+  res.json({ ok: true });
+});
+
+// Delete photo (Admin)
+app.delete('/api/admin/photos/:id', requireAdmin, async (req, res) => {
+  const { error } = await supabase
+    .from('photos')
+    .delete()
+    .eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: 'Failed to delete photo.' });
   res.json({ ok: true });
 });
 
